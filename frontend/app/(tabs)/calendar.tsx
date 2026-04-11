@@ -32,6 +32,46 @@ interface GoogleStatus {
   connected_at?: string;
 }
 
+// Helper function to format date/time in user-friendly way
+const formatDateTime = (isoString: string): string => {
+  if (!isoString) return '';
+  
+  const date = new Date(isoString);
+  const now = new Date();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  
+  const isToday = date.toDateString() === now.toDateString();
+  const isTomorrow = date.toDateString() === tomorrow.toDateString();
+  
+  const timeStr = date.toLocaleTimeString('en-US', { 
+    hour: 'numeric', 
+    minute: '2-digit',
+    hour12: true 
+  });
+  
+  if (isToday) {
+    return `Today at ${timeStr}`;
+  } else if (isTomorrow) {
+    return `Tomorrow at ${timeStr}`;
+  } else {
+    // Show day of week if within next 7 days
+    const daysUntil = Math.floor((date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    if (daysUntil < 7 && daysUntil > 0) {
+      const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
+      return `${dayName} at ${timeStr}`;
+    } else {
+      // Show full date for further dates
+      const dateStr = date.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric',
+        year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
+      });
+      return `${dateStr} at ${timeStr}`;
+    }
+  }
+};
+
 export default function CalendarScreen() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
@@ -240,7 +280,7 @@ export default function CalendarScreen() {
             <Ionicons name="checkmark-circle" size={18} color="#34D399" />
             <Text style={styles.googleConnectedText}>
               Google Calendar connected
-              {googleStatus.last_sync && ` • Last sync: ${new Date(googleStatus.last_sync).toLocaleTimeString()}`}
+              {googleStatus.last_sync && ` • Last sync: ${new Date(googleStatus.last_sync).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`}
             </Text>
           </View>
           <TouchableOpacity
@@ -295,7 +335,7 @@ export default function CalendarScreen() {
                   </View>
                   <View style={styles.planMeta}>
                     <Ionicons name="time-outline" size={14} color="#71717A" />
-                    <Text style={styles.planTime}>{plan.start_time}</Text>
+                    <Text style={styles.planTime}>{formatDateTime(plan.start_time)}</Text>
                   </View>
                 </View>
                 {!plan.synced_from_google && (
