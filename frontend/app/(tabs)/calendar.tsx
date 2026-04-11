@@ -81,6 +81,8 @@ export default function CalendarScreen() {
   const [newLocation, setNewLocation] = useState('');
   const [newDate, setNewDate] = useState(new Date());
   const [newTime, setNewTime] = useState(new Date());
+  const [newDateStr, setNewDateStr] = useState('');
+  const [newTimeStr, setNewTimeStr] = useState('');
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -161,14 +163,23 @@ export default function CalendarScreen() {
     if (!newTitle.trim() || !newLocation.trim()) return;
     setAdding(true);
     try {
-      // Combine date and time into ISO string
-      const combinedDateTime = new Date(
-        newDate.getFullYear(),
-        newDate.getMonth(),
-        newDate.getDate(),
-        newTime.getHours(),
-        newTime.getMinutes()
-      );
+      let combinedDateTime: Date;
+      
+      if (Platform.OS === 'web') {
+        // For web, parse from string inputs
+        const dateStr = newDateStr || new Date().toISOString().split('T')[0];
+        const timeStr = newTimeStr || '12:00';
+        combinedDateTime = new Date(`${dateStr}T${timeStr}`);
+      } else {
+        // For native, combine date and time objects
+        combinedDateTime = new Date(
+          newDate.getFullYear(),
+          newDate.getMonth(),
+          newDate.getDate(),
+          newTime.getHours(),
+          newTime.getMinutes()
+        );
+      }
       
       const plan = await apiPost('/api/plans', {
         title: newTitle,
@@ -181,6 +192,8 @@ export default function CalendarScreen() {
       setNewLocation('');
       setNewDate(new Date());
       setNewTime(new Date());
+      setNewDateStr('');
+      setNewTimeStr('');
     } catch (error: any) {
       alert(error.message || 'Failed to add plan');
     } finally {
@@ -429,18 +442,25 @@ export default function CalendarScreen() {
             <View style={styles.formGroup}>
               <Text style={styles.formLabel}>DATE</Text>
               {Platform.OS === 'web' ? (
-                <TextInput
-                  testID="plan-date-input-web"
-                  style={styles.formInput}
-                  value={newDate.toISOString().split('T')[0]}
-                  onChangeText={(value) => {
-                    const date = new Date(value);
-                    if (!isNaN(date.getTime())) {
-                      setNewDate(date);
-                    }
+                <input
+                  type="date"
+                  value={newDateStr || new Date().toISOString().split('T')[0]}
+                  onChange={(e: any) => setNewDateStr(e.target.value)}
+                  style={{
+                    backgroundColor: '#09090B',
+                    borderRadius: 12,
+                    paddingLeft: 16,
+                    paddingRight: 16,
+                    paddingTop: 14,
+                    paddingBottom: 14,
+                    color: '#FAFAFA',
+                    fontSize: 15,
+                    borderWidth: 1,
+                    borderStyle: 'solid',
+                    borderColor: '#27272A',
+                    fontFamily: 'inherit',
+                    width: '100%',
                   }}
-                  placeholder="YYYY-MM-DD"
-                  placeholderTextColor="#52525B"
                 />
               ) : (
                 <>
@@ -481,20 +501,25 @@ export default function CalendarScreen() {
             <View style={styles.formGroup}>
               <Text style={styles.formLabel}>TIME</Text>
               {Platform.OS === 'web' ? (
-                <TextInput
-                  testID="plan-time-input-web"
-                  style={styles.formInput}
-                  value={`${String(newTime.getHours()).padStart(2, '0')}:${String(newTime.getMinutes()).padStart(2, '0')}`}
-                  onChangeText={(value) => {
-                    const [hours, minutes] = value.split(':').map(Number);
-                    if (!isNaN(hours) && !isNaN(minutes)) {
-                      const time = new Date();
-                      time.setHours(hours, minutes);
-                      setNewTime(time);
-                    }
+                <input
+                  type="time"
+                  value={newTimeStr || '12:00'}
+                  onChange={(e: any) => setNewTimeStr(e.target.value)}
+                  style={{
+                    backgroundColor: '#09090B',
+                    borderRadius: 12,
+                    paddingLeft: 16,
+                    paddingRight: 16,
+                    paddingTop: 14,
+                    paddingBottom: 14,
+                    color: '#FAFAFA',
+                    fontSize: 15,
+                    borderWidth: 1,
+                    borderStyle: 'solid',
+                    borderColor: '#27272A',
+                    fontFamily: 'inherit',
+                    width: '100%',
                   }}
-                  placeholder="HH:MM"
-                  placeholderTextColor="#52525B"
                 />
               ) : (
                 <>
