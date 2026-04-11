@@ -428,67 +428,105 @@ export default function CalendarScreen() {
 
             <View style={styles.formGroup}>
               <Text style={styles.formLabel}>DATE</Text>
-              <TouchableOpacity
-                testID="plan-date-picker-button"
-                style={styles.dateTimeButton}
-                onPress={() => setShowDatePicker(true)}
-              >
-                <Ionicons name="calendar-outline" size={18} color="#0EA5E9" />
-                <Text style={styles.dateTimeText}>
-                  {newDate.toLocaleDateString('en-US', { 
-                    weekday: 'short',
-                    month: 'short', 
-                    day: 'numeric',
-                    year: 'numeric'
-                  })}
-                </Text>
-              </TouchableOpacity>
-              {showDatePicker && (
-                <DateTimePicker
-                  testID="date-picker"
-                  value={newDate}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(event, selectedDate) => {
-                    setShowDatePicker(Platform.OS === 'ios');
-                    if (selectedDate) {
-                      setNewDate(selectedDate);
+              {Platform.OS === 'web' ? (
+                <TextInput
+                  testID="plan-date-input-web"
+                  style={styles.formInput}
+                  value={newDate.toISOString().split('T')[0]}
+                  onChangeText={(value) => {
+                    const date = new Date(value);
+                    if (!isNaN(date.getTime())) {
+                      setNewDate(date);
                     }
                   }}
-                  minimumDate={new Date()}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor="#52525B"
                 />
+              ) : (
+                <>
+                  <TouchableOpacity
+                    testID="plan-date-picker-button"
+                    style={styles.dateTimeButton}
+                    onPress={() => setShowDatePicker(true)}
+                  >
+                    <Ionicons name="calendar-outline" size={18} color="#0EA5E9" />
+                    <Text style={styles.dateTimeText}>
+                      {newDate.toLocaleDateString('en-US', { 
+                        weekday: 'short',
+                        month: 'short', 
+                        day: 'numeric',
+                        year: 'numeric'
+                      })}
+                    </Text>
+                  </TouchableOpacity>
+                  {showDatePicker && (
+                    <DateTimePicker
+                      testID="date-picker"
+                      value={newDate}
+                      mode="date"
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={(event, selectedDate) => {
+                        setShowDatePicker(Platform.OS === 'ios');
+                        if (selectedDate) {
+                          setNewDate(selectedDate);
+                        }
+                      }}
+                      minimumDate={new Date()}
+                    />
+                  )}
+                </>
               )}
             </View>
 
             <View style={styles.formGroup}>
               <Text style={styles.formLabel}>TIME</Text>
-              <TouchableOpacity
-                testID="plan-time-picker-button"
-                style={styles.dateTimeButton}
-                onPress={() => setShowTimePicker(true)}
-              >
-                <Ionicons name="time-outline" size={18} color="#0EA5E9" />
-                <Text style={styles.dateTimeText}>
-                  {newTime.toLocaleTimeString('en-US', { 
-                    hour: 'numeric',
-                    minute: '2-digit',
-                    hour12: true
-                  })}
-                </Text>
-              </TouchableOpacity>
-              {showTimePicker && (
-                <DateTimePicker
-                  testID="time-picker"
-                  value={newTime}
-                  mode="time"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(event, selectedTime) => {
-                    setShowTimePicker(Platform.OS === 'ios');
-                    if (selectedTime) {
-                      setNewTime(selectedTime);
+              {Platform.OS === 'web' ? (
+                <TextInput
+                  testID="plan-time-input-web"
+                  style={styles.formInput}
+                  value={`${String(newTime.getHours()).padStart(2, '0')}:${String(newTime.getMinutes()).padStart(2, '0')}`}
+                  onChangeText={(value) => {
+                    const [hours, minutes] = value.split(':').map(Number);
+                    if (!isNaN(hours) && !isNaN(minutes)) {
+                      const time = new Date();
+                      time.setHours(hours, minutes);
+                      setNewTime(time);
                     }
                   }}
+                  placeholder="HH:MM"
+                  placeholderTextColor="#52525B"
                 />
+              ) : (
+                <>
+                  <TouchableOpacity
+                    testID="plan-time-picker-button"
+                    style={styles.dateTimeButton}
+                    onPress={() => setShowTimePicker(true)}
+                  >
+                    <Ionicons name="time-outline" size={18} color="#0EA5E9" />
+                    <Text style={styles.dateTimeText}>
+                      {newTime.toLocaleTimeString('en-US', { 
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        hour12: true
+                      })}
+                    </Text>
+                  </TouchableOpacity>
+                  {showTimePicker && (
+                    <DateTimePicker
+                      testID="time-picker"
+                      value={newTime}
+                      mode="time"
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={(event, selectedTime) => {
+                        setShowTimePicker(Platform.OS === 'ios');
+                        if (selectedTime) {
+                          setNewTime(selectedTime);
+                        }
+                      }}
+                    />
+                  )}
+                </>
               )}
             </View>
 
