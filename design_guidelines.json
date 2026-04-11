@@ -1,0 +1,97 @@
+{
+  "project_name": "Agentic Safeguard",
+  "theme": "Dark",
+  "archetype": "Archetype 5 (Jewel & Luxury) combined with Archetype 4 (Swiss & High-Contrast Data Authority). Deep, moody, and elite.",
+  "tone": "Sleek, modern, elegant, elite, reassuring. Never panic-inducing.",
+  "typography": {
+    "heading_font": "Outfit",
+    "body_font": "Manrope",
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl tracking-tight font-light",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-medium",
+      "h3": "text-xl sm:text-2xl font-medium",
+      "h4": "text-lg sm:text-xl font-medium",
+      "body": "text-base leading-relaxed text-zinc-300",
+      "small": "text-xs sm:text-sm text-zinc-400 uppercase tracking-[0.2em]"
+    },
+    "rules": [
+      "Headlines MUST use tracking-tight.",
+      "Overlines MUST be uppercase and wide tracking-[0.2em].",
+      "NEVER use Inter for headings."
+    ]
+  },
+  "colors": {
+    "background": {
+      "main": "bg-[#09090B] (Zinc 950 / Obsidian)",
+      "surface": "bg-[#18181B] (Zinc 900 / Deep Slate)",
+      "surface_elevated": "bg-[#27272A] (Zinc 800)"
+    },
+    "text": {
+      "primary": "text-zinc-50",
+      "secondary": "text-zinc-400",
+      "accent": "text-sky-400"
+    },
+    "borders": {
+      "default": "border-zinc-800",
+      "glass": "border-white/10"
+    },
+    "status": {
+      "safe": "text-emerald-400 bg-emerald-400/10 border-emerald-400/20",
+      "warning": "text-amber-400 bg-amber-400/10 border-amber-400/20",
+      "danger": "text-rose-400 bg-rose-400/10 border-rose-400/20"
+    },
+    "primary": {
+      "bg": "bg-sky-500",
+      "text": "text-zinc-950",
+      "hover": "hover:bg-sky-400 hover:text-zinc-950"
+    }
+  },
+  "surfaces": {
+    "glass_panel": "backdrop-blur-xl bg-zinc-950/60 border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.5)]",
+    "card": "bg-zinc-900 border border-zinc-800 rounded-2xl p-6 hover:-translate-y-1 hover:shadow-lg hover:border-zinc-700 transition-all duration-300",
+    "button_primary": "bg-sky-500 hover:bg-sky-400 text-zinc-950 font-medium rounded-full px-6 py-3 transition-all",
+    "badge": "rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wider border"
+  },
+  "layout_spacing": {
+    "padding": "p-4 sm:p-6 md:p-8",
+    "gap": "gap-4 sm:gap-6 md:gap-8",
+    "grid": "grid grid-cols-1 md:grid-cols-4 lg:grid-cols-12 gap-6",
+    "bento_grid": "Grid Layout Technical Rules: Use 'The Control Room' Grid style for Risk Assessment Dashboard.",
+    "rules": [
+      "Generous spacing: use 2x padding inside containers.",
+      "Mobile-First: Always start with grid-cols-1.",
+      "Grid items must be direct children."
+    ]
+  },
+  "components": {
+    "map_view": "Map should act as the full-screen background layer. UI overlays must use 'glass_panel' surface to float above it.",
+    "ai_chat": "Implement as a floating bottom sheet or modal. Use the provided dark abstract orb as the AI avatar. Add a subtle pulsing glow effect: `shadow-[0_0_15px_rgba(56,189,248,0.3)]`.",
+    "calendar_integration": "List view of upcoming events. Each event card shows a safety pill (safe/warning/danger).",
+    "dashboard": "Bento Grid layout displaying analytics on shootings. Use Recharts with dark mode colors (Rose, Amber, Emerald, Sky).",
+    "icons": "Use @phosphor-icons/react (regular or thin weight) for an elegant line-art feel."
+  },
+  "media": {
+    "ai_avatar": {
+      "url": "https://images.unsplash.com/photo-1763596396590-81193928cdeb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjd8MHwxfHNlYXJjaHwxfHxkYXJrJTIwZ2xvd2luZyUyMGJsdWUlMjBvcmIlMjBhYnN0cmFjdHxlbnwwfHx8fDE3NzU4NjkzNzh8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Dark abstract orb with glowing rings - Use as the avatar for the Agentic Safeguard AI."
+    },
+    "map_background": {
+      "url": "https://images.unsplash.com/photo-1629044932273-259127aec85b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2ODl8MHwxfHNlYXJjaHwxfHxkYXJrJTIwY2l0eSUyMG1hcCUyMHRvcCUyMGRvd24lMjB2aWV3fGVufDB8fHx8MTc3NTg2OTM3OHww&ixlib=rb-4.1.0&q=85",
+      "description": "Aerial view of city buildings during night time - Use as the underlying map layer or splash screen background if real map is not rendering."
+    },
+    "city_skyline": {
+      "url": "https://images.unsplash.com/photo-1644530777878-f576db6ac8ea?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwxfHxuZXclMjB5b3JrJTIwY2l0eSUyMG5pZ2h0JTIwc2t5bGluZXxlbnwwfHx8fDE3NzU4NjkzNzl8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Wooden bridge with NYC skyline in the background - Use for dashboard hero sections or empty state backgrounds."
+    }
+  },
+  "instructions_to_main_agent": [
+    "You are building 'Agentic Safeguard', a high-end mobile app UI in React.",
+    "Since the target is mobile-first, build a layout that restricts maximum width on desktop (e.g., `max-w-md mx-auto h-screen relative overflow-hidden bg-zinc-950`) to simulate a mobile app frame.",
+    "Do NOT use 'Inter' for headings. Use 'Outfit' for headings and 'Manrope' for body text via Google Fonts. Make sure to apply `tracking-tight` on all headings.",
+    "For the Interactive Map view, use the `map_background` image as an absolutely positioned background, with UI elements floating over it using the `glass_panel` class.",
+    "The AI Agent MUST feel elite and helpful. Use the `ai_avatar` for the chat head/avatar.",
+    "Integrate Shadcn primitives heavily customized to match the dark glassmorphism aesthetic. All overlays must use `backdrop-blur-xl bg-zinc-950/60 border border-white/10`.",
+    "Data-testid: ALL interactive and key informational elements MUST include a `data-testid` attribute (e.g., `data-testid=\"ai-chat-button\"`).",
+    "Please install: `yarn add @phosphor-icons/react recharts lucide-react framer-motion`."
+  ]
+}
