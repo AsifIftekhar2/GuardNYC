@@ -9,20 +9,14 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true,
-      "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "Share photos of safety incidents",
-        "NSCameraUsageDescription": "Take photos of safety incidents",
-        "NSLocationWhenInUseUsageDescription": "Show your location on the safety map"
-      }
+      "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000"
       },
-      "edgeToEdgeEnabled": true,
-      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "ACCESS_FINE_LOCATION"]
+      "edgeToEdgeEnabled": true
     },
     "web": {
       "bundler": "metro",
