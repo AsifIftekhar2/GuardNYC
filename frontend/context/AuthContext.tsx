@@ -7,6 +7,9 @@ interface User {
   name: string;
   email: string;
   role: string;
+  subscription_tier: string;
+  google_calendar_connected: boolean;
+  unread_notifications: number;
 }
 
 interface AuthContextType {
@@ -15,14 +18,12 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
-  user: null,
-  loading: true,
-  login: async () => {},
-  register: async () => {},
-  logout: async () => {},
+  user: null, loading: true,
+  login: async () => {}, register: async () => {}, logout: async () => {}, refreshUser: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -39,18 +40,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const response = await apiGet('/api/auth/me');
         setUser(response.user);
       }
-    } catch (error) {
-      await AsyncStorage.removeItem('access_token');
-      await AsyncStorage.removeItem('refresh_token');
+    } catch {
+      await AsyncStorage.multiRemove(['access_token', 'refresh_token']);
       clearAuthToken();
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    checkAuth();
-  }, [checkAuth]);
+  useEffect(() => { checkAuth(); }, [checkAuth]);
 
   const login = async (email: string, password: string) => {
     const response = await apiPost('/api/auth/login', { email, password });
@@ -69,17 +67,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
-    try {
-      await apiPost('/api/auth/logout', {});
-    } catch {}
-    await AsyncStorage.removeItem('access_token');
-    await AsyncStorage.removeItem('refresh_token');
+    try { await apiPost('/api/auth/logout', {}); } catch {}
+    await AsyncStorage.multiRemove(['access_token', 'refresh_token']);
     clearAuthToken();
     setUser(null);
   };
 
+  const refreshUser = async () => {
+    try {
+      const response = await apiGet('/api/auth/me');
+      setUser(response.user);
+    } catch {}
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
