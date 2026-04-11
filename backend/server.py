@@ -41,7 +41,7 @@ JWT_ALGORITHM = "HS256"
 # Google OAuth Config
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
-GOOGLE_REDIRECT_URI = f"{os.environ.get('EXPO_PUBLIC_BACKEND_URL', 'http://localhost:8001')}/api/google/callback"
+GOOGLE_REDIRECT_URI = os.environ.get('GOOGLE_REDIRECT_URI', 'https://app-launch-241.preview.emergentagent.com/api/google/callback')
 GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 
 # App
@@ -705,7 +705,7 @@ async def google_callback(code: str, state: str):
             
             # Redirect back to app with success
             return RedirectResponse(
-                url=f"{os.environ.get('EXPO_PUBLIC_BACKEND_URL', '')}/?google_calendar=connected",
+                url=f"/?google_calendar=connected",
                 status_code=302
             )
     except Exception as e:
