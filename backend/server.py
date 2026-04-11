@@ -533,26 +533,52 @@ async def analyze_plan(plan_id: str, user=Depends(get_current_user)):
 
 async def geocode_location(location_name: str):
     """Geocode a location name to coordinates using Nominatim"""
+    if not location_name or location_name.strip() == "":
+        return None
+    
     try:
+        # Clean up location name
+        location = location_name.strip()
+        
+        # If location doesn't mention NYC, try multiple search strategies
+        search_terms = []
+        if 'new york' not in location.lower() and 'nyc' not in location.lower() and 'ny' not in location.lower():
+            search_terms.append(f"{location}, New York City, NY")
+            search_terms.append(f"{location}, NYC")
+            search_terms.append(f"{location}, New York, USA")
+        else:
+            search_terms.append(location)
+        
         async with httpx.AsyncClient() as http_client:
-            params = {
-                "q": f"{location_name}, New York City, NY",
-                "format": "json",
-                "limit": 1,
-                "countrycodes": "us"
-            }
-            response = await http_client.get(
-                "https://nominatim.openstreetmap.org/search",
-                params=params,
-                headers={"User-Agent": "AgenticSafeguard/1.0"},
-                timeout=10
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if data:
-                    return (float(data[0]["lat"]), float(data[0]["lon"]))
+            for search_term in search_terms:
+                params = {
+                    "q": search_term,
+                    "format": "json",
+                    "limit": 1,
+                    "countrycodes": "us"
+                }
+                response = await http_client.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params=params,
+                    headers={"User-Agent": "AgenticSafeguard/1.0"},
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    if data:
+                        lat, lon = float(data[0]["lat"]), float(data[0]["lon"])
+                        # Verify it's in NYC area (rough bounds)
+                        # NYC bounds: lat 40.4-40.95, lon -74.3--73.7
+                        if 40.4 <= lat <= 40.95 and -74.3 <= lon <= -73.7:
+                            logger.info(f"Geocoded '{location_name}' to ({lat}, {lon})")
+                            return (lat, lon)
+                        else:
+                            logger.warning(f"'{search_term}' not in NYC area: ({lat}, {lon})")
+                            continue
     except Exception as e:
-        logger.error(f"Geocoding error: {e}")
+        logger.error(f"Geocoding error for '{location_name}': {e}")
+    
+    logger.warning(f"Could not geocode location: '{location_name}'")
     return None
 
 # ==================== STATS ====================
