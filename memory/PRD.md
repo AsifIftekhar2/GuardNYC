@@ -63,6 +63,11 @@ Agentic Safeguard is an AI-powered NYC safety intelligence mobile app that helps
 | GET | /api/stats/boroughs | Borough statistics |
 | GET | /api/stats/time-distribution | Time distribution |
 | GET | /api/geocode | Geocode location |
+| **GET** | **/api/google/auth** | **Initiate Google OAuth flow** |
+| **GET** | **/api/google/callback** | **Handle OAuth callback** |
+| **GET** | **/api/google/status** | **Check Google Calendar connection status** |
+| **POST** | **/api/google/sync** | **Manually sync Google Calendar events** |
+| **POST** | **/api/google/disconnect** | **Disconnect Google Calendar** |
 
 ## Data Source
 - NYC OpenData: NYPD Shooting Incident Data (2006-Present)

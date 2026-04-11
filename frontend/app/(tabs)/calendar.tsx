@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  ScrollView, ActivityIndicator, Modal, KeyboardAvoidingView, Platform,
+  ScrollView, ActivityIndicator, Modal, KeyboardAvoidingView, Platform, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as WebBrowser from 'expo-web-browser';
 import { apiGet, apiPost, apiDelete } from '../../utils/api';
+
+WebBrowser.maybeCompleteAuthSession();
 
 interface Plan {
   id: string;
@@ -13,12 +16,20 @@ interface Plan {
   location_name: string;
   start_time: string;
   end_time?: string;
+  synced_from_google?: boolean;
+  google_event_id?: string;
   safety_analysis?: {
     rating: number;
     risk_level: string;
     assessment: string;
     recommendations?: string[];
   };
+}
+
+interface GoogleStatus {
+  connected: boolean;
+  last_sync?: string;
+  connected_at?: string;
 }
 
 export default function CalendarScreen() {
@@ -29,9 +40,13 @@ export default function CalendarScreen() {
   const [newLocation, setNewLocation] = useState('');
   const [newTime, setNewTime] = useState('');
   const [adding, setAdding] = useState(false);
+  const [googleStatus, setGoogleStatus] = useState<GoogleStatus>({ connected: false });
+  const [syncing, setSyncing] = useState(false);
+  const [connecting, setConnecting] = useState(false);
 
   useEffect(() => {
     loadPlans();
+    checkGoogleStatus();
   }, []);
 
   const loadPlans = async () => {
@@ -41,6 +56,60 @@ export default function CalendarScreen() {
     } catch {
     } finally {
       setLoading(false);
+    }
+  };
+
+  const checkGoogleStatus = async () => {
+    try {
+      const status = await apiGet('/api/google/status');
+      setGoogleStatus(status);
+    } catch (error) {
+      console.error('Failed to check Google status:', error);
+    }
+  };
+
+  const connectGoogleCalendar = async () => {
+    setConnecting(true);
+    try {
+      const authData = await apiGet('/api/google/auth');
+      const result = await WebBrowser.openAuthSessionAsync(
+        authData.authorization_url,
+        `${process.env.EXPO_PUBLIC_BACKEND_URL}/?google_calendar=connected`
+      );
+      
+      if (result.type === 'success') {
+        await checkGoogleStatus();
+        await loadPlans();
+      }
+    } catch (error: any) {
+      alert('Failed to connect Google Calendar: ' + (error.message || 'Unknown error'));
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const syncGoogleCalendar = async () => {
+    setSyncing(true);
+    try {
+      const result = await apiPost('/api/google/sync', {});
+      await loadPlans();
+      await checkGoogleStatus();
+      alert(`Synced ${result.count} events from Google Calendar`);
+    } catch (error: any) {
+      alert('Sync failed: ' + (error.message || 'Unknown error'));
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const disconnectGoogleCalendar = async () => {
+    try {
+      await apiPost('/api/google/disconnect', {});
+      setGoogleStatus({ connected: false });
+      await loadPlans();
+      alert('Google Calendar disconnected');
+    } catch (error: any) {
+      alert('Failed to disconnect: ' + (error.message || 'Unknown error'));
     }
   };
 
@@ -118,14 +187,71 @@ export default function CalendarScreen() {
           <Text style={styles.headerTitle}>My Plans</Text>
           <Text style={styles.headerSub}>Safety-aware scheduling</Text>
         </View>
-        <TouchableOpacity
-          testID="add-plan-button"
-          style={styles.addBtn}
-          onPress={() => setShowAddModal(true)}
-        >
-          <Ionicons name="add" size={22} color="#09090B" />
-        </TouchableOpacity>
+        <View style={styles.headerButtons}>
+          {googleStatus.connected ? (
+            <TouchableOpacity
+              testID="sync-google-button"
+              style={styles.syncBtn}
+              onPress={syncGoogleCalendar}
+              disabled={syncing}
+            >
+              {syncing ? (
+                <ActivityIndicator size="small" color="#34D399" />
+              ) : (
+                <Ionicons name="sync" size={18} color="#34D399" />
+              )}
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            testID="add-plan-button"
+            style={styles.addBtn}
+            onPress={() => setShowAddModal(true)}
+          >
+            <Ionicons name="add" size={22} color="#09090B" />
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {!googleStatus.connected && (
+        <TouchableOpacity
+          testID="connect-google-calendar"
+          style={styles.googleConnectBanner}
+          onPress={connectGoogleCalendar}
+          disabled={connecting}
+        >
+          <View style={styles.googleBannerLeft}>
+            <Ionicons name="logo-google" size={20} color="#0EA5E9" />
+            <View style={styles.googleBannerText}>
+              <Text style={styles.googleBannerTitle}>Connect Google Calendar</Text>
+              <Text style={styles.googleBannerDesc}>Auto-sync your events with safety analysis</Text>
+            </View>
+          </View>
+          {connecting ? (
+            <ActivityIndicator size="small" color="#0EA5E9" />
+          ) : (
+            <Ionicons name="chevron-forward" size={20} color="#52525B" />
+          )}
+        </TouchableOpacity>
+      )}
+
+      {googleStatus.connected && (
+        <View style={styles.googleConnectedBanner}>
+          <View style={styles.googleConnectedLeft}>
+            <Ionicons name="checkmark-circle" size={18} color="#34D399" />
+            <Text style={styles.googleConnectedText}>
+              Google Calendar connected
+              {googleStatus.last_sync && ` • Last sync: ${new Date(googleStatus.last_sync).toLocaleTimeString()}`}
+            </Text>
+          </View>
+          <TouchableOpacity
+            testID="disconnect-google"
+            onPress={disconnectGoogleCalendar}
+            style={styles.disconnectBtn}
+          >
+            <Text style={styles.disconnectText}>Disconnect</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {loading ? (
         <View style={styles.centered}>
@@ -155,7 +281,14 @@ export default function CalendarScreen() {
             <View key={plan.id} style={styles.planCard}>
               <View style={styles.planHeader}>
                 <View style={styles.planInfo}>
-                  <Text style={styles.planTitle}>{plan.title}</Text>
+                  <View style={styles.planTitleRow}>
+                    <Text style={styles.planTitle}>{plan.title}</Text>
+                    {plan.synced_from_google && (
+                      <View style={styles.googleBadge}>
+                        <Ionicons name="logo-google" size={12} color="#34D399" />
+                      </View>
+                    )}
+                  </View>
                   <View style={styles.planMeta}>
                     <Ionicons name="location-outline" size={14} color="#71717A" />
                     <Text style={styles.planLocation}>{plan.location_name}</Text>
@@ -165,9 +298,11 @@ export default function CalendarScreen() {
                     <Text style={styles.planTime}>{plan.start_time}</Text>
                   </View>
                 </View>
-                <TouchableOpacity testID={`delete-plan-${plan.id}`} onPress={() => deletePlan(plan.id)}>
-                  <Ionicons name="trash-outline" size={20} color="#52525B" />
-                </TouchableOpacity>
+                {!plan.synced_from_google && (
+                  <TouchableOpacity testID={`delete-plan-${plan.id}`} onPress={() => deletePlan(plan.id)}>
+                    <Ionicons name="trash-outline" size={20} color="#52525B" />
+                  </TouchableOpacity>
+                )}
               </View>
 
               {plan.safety_analysis ? (
@@ -280,10 +415,43 @@ const styles = StyleSheet.create({
   },
   headerTitle: { color: '#FAFAFA', fontSize: 24, fontWeight: '300', letterSpacing: -0.5 },
   headerSub: { color: '#52525B', fontSize: 12, marginTop: 2, letterSpacing: 0.5 },
+  headerButtons: { flexDirection: 'row', gap: 10 },
+  syncBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(52,211,153,0.1)',
+    borderWidth: 1, borderColor: 'rgba(52,211,153,0.3)',
+    alignItems: 'center', justifyContent: 'center',
+  },
   addBtn: {
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: '#0EA5E9',
     alignItems: 'center', justifyContent: 'center',
+  },
+  googleConnectBanner: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginHorizontal: 16, marginTop: 12, padding: 14,
+    backgroundColor: '#18181B', borderRadius: 14,
+    borderWidth: 1, borderColor: '#27272A',
+  },
+  googleBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  googleBannerText: { flex: 1 },
+  googleBannerTitle: { color: '#FAFAFA', fontSize: 14, fontWeight: '500' },
+  googleBannerDesc: { color: '#71717A', fontSize: 12, marginTop: 2 },
+  googleConnectedBanner: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginHorizontal: 16, marginTop: 12, padding: 12,
+    backgroundColor: 'rgba(52,211,153,0.1)', borderRadius: 12,
+    borderWidth: 1, borderColor: 'rgba(52,211,153,0.2)',
+  },
+  googleConnectedLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  googleConnectedText: { color: '#34D399', fontSize: 12, fontWeight: '500' },
+  disconnectBtn: { paddingHorizontal: 10, paddingVertical: 6 },
+  disconnectText: { color: '#FB7185', fontSize: 12, fontWeight: '500' },
+  googleBadge: {
+    width: 20, height: 20, borderRadius: 10,
+    backgroundColor: 'rgba(52,211,153,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+    marginLeft: 6,
   },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
@@ -307,6 +475,7 @@ const styles = StyleSheet.create({
   },
   planHeader: { flexDirection: 'row', justifyContent: 'space-between' },
   planInfo: { flex: 1, gap: 6 },
+  planTitleRow: { flexDirection: 'row', alignItems: 'center' },
   planTitle: { color: '#FAFAFA', fontSize: 16, fontWeight: '500' },
   planMeta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   planLocation: { color: '#A1A1AA', fontSize: 13 },

@@ -5,6 +5,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi.responses import RedirectResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
@@ -12,6 +13,9 @@ from typing import List, Optional
 from bson import ObjectId
 from datetime import datetime, timezone, timedelta
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request as GoogleRequest
+from googleapiclient.discovery import build
 import os
 import logging
 import uuid
@@ -33,6 +37,12 @@ db = client[os.environ['DB_NAME']]
 # JWT Config
 JWT_SECRET = os.environ.get('JWT_SECRET', 'dev-secret-change-me')
 JWT_ALGORITHM = "HS256"
+
+# Google OAuth Config
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
+GOOGLE_REDIRECT_URI = f"{os.environ.get('EXPO_PUBLIC_BACKEND_URL', 'http://localhost:8001')}/api/google/callback"
+GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 
 # App
 app = FastAPI(title="Agentic Safeguard API")
@@ -598,6 +608,249 @@ async def geocode(q: str):
     if coords:
         return {"latitude": coords[0], "longitude": coords[1], "query": q}
     raise HTTPException(status_code=404, detail="Location not found")
+
+# ==================== GOOGLE CALENDAR INTEGRATION ====================
+
+async def get_google_credentials(user_id: str):
+    """Get and refresh Google credentials for a user"""
+    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not user or not user.get("google_tokens"):
+        return None
+    
+    tokens = user["google_tokens"]
+    creds = Credentials(
+        token=tokens.get("access_token"),
+        refresh_token=tokens.get("refresh_token"),
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        scopes=GOOGLE_SCOPES
+    )
+    
+    # Auto-refresh if expired
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(GoogleRequest())
+            # Update tokens in database
+            await db.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {
+                    "google_tokens.access_token": creds.token,
+                    "google_tokens.expiry": creds.expiry.isoformat() if creds.expiry else None
+                }}
+            )
+        except Exception as e:
+            logger.error(f"Token refresh failed: {e}")
+            return None
+    
+    return creds
+
+@api_router.get("/google/auth")
+async def google_auth(user=Depends(get_current_user)):
+    """Initiate Google OAuth flow"""
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Google OAuth not configured")
+    
+    # Build authorization URL
+    auth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth?"
+        f"client_id={GOOGLE_CLIENT_ID}&"
+        f"redirect_uri={GOOGLE_REDIRECT_URI}&"
+        "response_type=code&"
+        f"scope={' '.join(GOOGLE_SCOPES)}&"
+        "access_type=offline&"
+        "prompt=consent&"
+        f"state={user['_id']}"  # Pass user ID as state
+    )
+    
+    return {"authorization_url": auth_url}
+
+@api_router.get("/google/callback")
+async def google_callback(code: str, state: str):
+    """Handle Google OAuth callback"""
+    try:
+        # Exchange code for tokens
+        async with httpx.AsyncClient() as client:
+            token_response = await client.post(
+                'https://oauth2.googleapis.com/token',
+                data={
+                    'code': code,
+                    'client_id': GOOGLE_CLIENT_ID,
+                    'client_secret': GOOGLE_CLIENT_SECRET,
+                    'redirect_uri': GOOGLE_REDIRECT_URI,
+                    'grant_type': 'authorization_code'
+                }
+            )
+            
+            if token_response.status_code != 200:
+                raise HTTPException(status_code=400, detail="Failed to exchange code for token")
+            
+            tokens = token_response.json()
+            
+            # Save tokens to user (state contains user_id)
+            user_id = state
+            await db.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {
+                    "google_tokens": tokens,
+                    "google_connected_at": datetime.now(timezone.utc).isoformat()
+                }}
+            )
+            
+            # Trigger initial sync
+            try:
+                await sync_google_calendar(user_id)
+            except Exception as e:
+                logger.error(f"Initial sync failed: {e}")
+            
+            # Redirect back to app with success
+            return RedirectResponse(
+                url=f"{os.environ.get('EXPO_PUBLIC_BACKEND_URL', '')}/?google_calendar=connected",
+                status_code=302
+            )
+    except Exception as e:
+        logger.error(f"Google callback error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/google/status")
+async def google_calendar_status(user=Depends(get_current_user)):
+    """Check if user has connected Google Calendar"""
+    user_id = user["_id"]
+    user_doc = await db.users.find_one({"_id": ObjectId(user_id)})
+    
+    connected = bool(user_doc.get("google_tokens"))
+    last_sync = user_doc.get("google_last_sync")
+    
+    return {
+        "connected": connected,
+        "last_sync": last_sync,
+        "connected_at": user_doc.get("google_connected_at")
+    }
+
+@api_router.post("/google/sync")
+async def trigger_google_sync(user=Depends(get_current_user)):
+    """Manually trigger Google Calendar sync"""
+    user_id = user["_id"]
+    synced_count = await sync_google_calendar(user_id)
+    return {"message": f"Synced {synced_count} events from Google Calendar", "count": synced_count}
+
+@api_router.post("/google/disconnect")
+async def disconnect_google_calendar(user=Depends(get_current_user)):
+    """Disconnect Google Calendar and remove synced events"""
+    user_id = user["_id"]
+    
+    # Remove Google tokens
+    await db.users.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$unset": {"google_tokens": "", "google_connected_at": "", "google_last_sync": ""}}
+    )
+    
+    # Delete synced plans
+    result = await db.plans.delete_many({
+        "user_id": user_id,
+        "google_event_id": {"$exists": True}
+    })
+    
+    return {"message": f"Disconnected and removed {result.deleted_count} synced events"}
+
+async def sync_google_calendar(user_id: str):
+    """Sync events from Google Calendar"""
+    creds = await get_google_credentials(user_id)
+    if not creds:
+        raise HTTPException(status_code=401, detail="Google Calendar not connected")
+    
+    try:
+        service = build('calendar', 'v3', credentials=creds)
+        
+        # Get events for next 30 days
+        now = datetime.now(timezone.utc)
+        time_min = now.isoformat()
+        time_max = (now + timedelta(days=30)).isoformat()
+        
+        events_result = service.events().list(
+            calendarId='primary',
+            timeMin=time_min,
+            timeMax=time_max,
+            maxResults=50,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+        
+        events = events_result.get('items', [])
+        synced_count = 0
+        
+        for event in events:
+            event_id = event['id']
+            
+            # Extract location
+            location_name = event.get('location', 'Unknown location')
+            
+            # Extract time
+            start = event['start'].get('dateTime', event['start'].get('date'))
+            end = event['end'].get('dateTime', event['end'].get('date'))
+            
+            # Check if we already have this event
+            existing = await db.plans.find_one({
+                "user_id": user_id,
+                "google_event_id": event_id
+            })
+            
+            # Geocode location for NYC events
+            lat, lon = None, None
+            if location_name and location_name != 'Unknown location':
+                coords = await geocode_location(location_name)
+                if coords:
+                    lat, lon = coords
+            
+            plan_data = {
+                "user_id": user_id,
+                "google_event_id": event_id,
+                "title": event.get('summary', 'Untitled Event'),
+                "location_name": location_name,
+                "latitude": lat,
+                "longitude": lon,
+                "start_time": start,
+                "end_time": end,
+                "notes": event.get('description', ''),
+                "safety_analysis": None,
+                "synced_from_google": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "last_synced": datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Auto-analyze if we have coordinates and it's in NYC
+            if lat and lon:
+                try:
+                    analysis = await run_safety_analysis(lat, lon, location_name, start)
+                    plan_data["safety_analysis"] = analysis
+                except Exception as e:
+                    logger.error(f"Auto-analysis failed for {location_name}: {e}")
+            
+            if existing:
+                # Update existing
+                await db.plans.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": plan_data}
+                )
+            else:
+                # Create new
+                plan_data["id"] = str(uuid.uuid4())
+                await db.plans.insert_one(plan_data)
+            
+            synced_count += 1
+        
+        # Update last sync time
+        await db.users.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": {"google_last_sync": datetime.now(timezone.utc).isoformat()}}
+        )
+        
+        logger.info(f"Synced {synced_count} Google Calendar events for user {user_id}")
+        return synced_count
+        
+    except Exception as e:
+        logger.error(f"Google Calendar sync error: {e}")
+        raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
 
 # ==================== STARTUP ====================
 
