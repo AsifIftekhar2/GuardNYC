@@ -6,6 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { apiGet, apiPost, apiDelete } from '../../utils/api';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -78,7 +79,10 @@ export default function CalendarScreen() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newLocation, setNewLocation] = useState('');
-  const [newTime, setNewTime] = useState('');
+  const [newDate, setNewDate] = useState(new Date());
+  const [newTime, setNewTime] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [adding, setAdding] = useState(false);
   const [googleStatus, setGoogleStatus] = useState<GoogleStatus>({ connected: false });
   const [syncing, setSyncing] = useState(false);
@@ -154,19 +158,29 @@ export default function CalendarScreen() {
   };
 
   const addPlan = async () => {
-    if (!newTitle.trim() || !newLocation.trim() || !newTime.trim()) return;
+    if (!newTitle.trim() || !newLocation.trim()) return;
     setAdding(true);
     try {
+      // Combine date and time into ISO string
+      const combinedDateTime = new Date(
+        newDate.getFullYear(),
+        newDate.getMonth(),
+        newDate.getDate(),
+        newTime.getHours(),
+        newTime.getMinutes()
+      );
+      
       const plan = await apiPost('/api/plans', {
         title: newTitle,
         location_name: newLocation,
-        start_time: newTime,
+        start_time: combinedDateTime.toISOString(),
       });
       setPlans(prev => [...prev, plan]);
       setShowAddModal(false);
       setNewTitle('');
       setNewLocation('');
-      setNewTime('');
+      setNewDate(new Date());
+      setNewTime(new Date());
     } catch (error: any) {
       alert(error.message || 'Failed to add plan');
     } finally {
@@ -413,15 +427,69 @@ export default function CalendarScreen() {
             </View>
 
             <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>WHEN</Text>
-              <TextInput
-                testID="plan-time-input"
-                style={styles.formInput}
-                value={newTime}
-                onChangeText={setNewTime}
-                placeholder="e.g., Tonight 8pm, Tomorrow 2pm"
-                placeholderTextColor="#52525B"
-              />
+              <Text style={styles.formLabel}>DATE</Text>
+              <TouchableOpacity
+                testID="plan-date-picker-button"
+                style={styles.dateTimeButton}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Ionicons name="calendar-outline" size={18} color="#0EA5E9" />
+                <Text style={styles.dateTimeText}>
+                  {newDate.toLocaleDateString('en-US', { 
+                    weekday: 'short',
+                    month: 'short', 
+                    day: 'numeric',
+                    year: 'numeric'
+                  })}
+                </Text>
+              </TouchableOpacity>
+              {showDatePicker && (
+                <DateTimePicker
+                  testID="date-picker"
+                  value={newDate}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={(event, selectedDate) => {
+                    setShowDatePicker(Platform.OS === 'ios');
+                    if (selectedDate) {
+                      setNewDate(selectedDate);
+                    }
+                  }}
+                  minimumDate={new Date()}
+                />
+              )}
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>TIME</Text>
+              <TouchableOpacity
+                testID="plan-time-picker-button"
+                style={styles.dateTimeButton}
+                onPress={() => setShowTimePicker(true)}
+              >
+                <Ionicons name="time-outline" size={18} color="#0EA5E9" />
+                <Text style={styles.dateTimeText}>
+                  {newTime.toLocaleTimeString('en-US', { 
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    hour12: true
+                  })}
+                </Text>
+              </TouchableOpacity>
+              {showTimePicker && (
+                <DateTimePicker
+                  testID="time-picker"
+                  value={newTime}
+                  mode="time"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={(event, selectedTime) => {
+                    setShowTimePicker(Platform.OS === 'ios');
+                    if (selectedTime) {
+                      setNewTime(selectedTime);
+                    }
+                  }}
+                />
+              )}
             </View>
 
             <TouchableOpacity
@@ -558,6 +626,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 14,
     color: '#FAFAFA', fontSize: 15,
     borderWidth: 1, borderColor: '#27272A',
+  },
+  dateTimeButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#09090B', borderRadius: 12,
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderWidth: 1, borderColor: '#27272A',
+  },
+  dateTimeText: {
+    color: '#FAFAFA', fontSize: 15, flex: 1,
   },
   submitBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
