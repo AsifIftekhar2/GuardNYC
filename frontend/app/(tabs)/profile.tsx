@@ -8,7 +8,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import { apiGet, apiPost } from '../../utils/api';
 import { useFocusEffect } from '@react-navigation/native';
-import React as ReactNative from 'react';
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
@@ -20,7 +19,7 @@ export default function ProfileScreen() {
   const [selectedHour, setSelectedHour] = useState(6);
 
   useFocusEffect(
-    ReactNative.useCallback(() => {
+    React.useCallback(() => {
       loadData();
     }, [])
   );
