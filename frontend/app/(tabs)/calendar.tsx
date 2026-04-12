@@ -118,18 +118,56 @@ export default function CalendarScreen() {
     setConnecting(true);
     try {
       const authData = await apiGet('/api/google/auth');
-      const result = await WebBrowser.openAuthSessionAsync(
-        authData.authorization_url,
-        `${process.env.EXPO_PUBLIC_BACKEND_URL}/?google_calendar=connected`
-      );
       
-      if (result.type === 'success') {
-        await checkGoogleStatus();
-        await loadPlans();
+      // Check if we're on web
+      if (Platform.OS === 'web') {
+        // Web: Open OAuth in popup window
+        const width = 500;
+        const height = 600;
+        const left = window.screen.width / 2 - width / 2;
+        const top = window.screen.height / 2 - height / 2;
+        
+        const popup = window.open(
+          authData.authorization_url,
+          'Google OAuth',
+          `width=${width},height=${height},left=${left},top=${top},popup=yes,scrollbars=yes`
+        );
+        
+        // Listen for message from popup
+        const handleMessage = (event: MessageEvent) => {
+          if (event.data.type === 'GOOGLE_CALENDAR_CONNECTED') {
+            window.removeEventListener('message', handleMessage);
+            checkGoogleStatus();
+            loadPlans();
+            setConnecting(false);
+          }
+        };
+        
+        window.addEventListener('message', handleMessage);
+        
+        // Check if popup was closed without completing auth
+        const checkClosed = setInterval(() => {
+          if (popup && popup.closed) {
+            clearInterval(checkClosed);
+            window.removeEventListener('message', handleMessage);
+            setConnecting(false);
+          }
+        }, 1000);
+      } else {
+        // Mobile: Use WebBrowser
+        const result = await WebBrowser.openAuthSessionAsync(
+          authData.authorization_url,
+          `${process.env.EXPO_PUBLIC_BACKEND_URL}/oauth-callback?google_calendar=connected`
+        );
+        
+        if (result.type === 'success') {
+          await checkGoogleStatus();
+          await loadPlans();
+        }
+        setConnecting(false);
       }
     } catch (error: any) {
       alert('Failed to connect Google Calendar: ' + (error.message || 'Unknown error'));
-    } finally {
       setConnecting(false);
     }
   };

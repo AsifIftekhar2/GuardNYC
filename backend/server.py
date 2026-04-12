@@ -752,9 +752,9 @@ async def google_callback(code: str, state: str):
             except Exception as e:
                 logger.error(f"Initial sync failed: {e}")
             
-            # Redirect back to frontend with success
+            # Redirect back to frontend oauth callback page
             return RedirectResponse(
-                url=f"{FRONTEND_URL}/?google_calendar=connected",
+                url=f"{FRONTEND_URL}/oauth-callback?google_calendar=connected",
                 status_code=302
             )
     except Exception as e:
