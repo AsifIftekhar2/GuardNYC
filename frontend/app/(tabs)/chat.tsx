@@ -94,9 +94,11 @@ export default function ChatScreen() {
             <Text style={styles.headerSub}>Powered by AI</Text>
           </View>
         </View>
-        <TouchableOpacity testID="clear-chat-button" onPress={clearChat}>
-          <Ionicons name="trash-outline" size={22} color="#71717A" />
-        </TouchableOpacity>
+        {messages.length > 0 && (
+          <TouchableOpacity testID="clear-chat-button" onPress={clearChat}>
+            <Ionicons name="trash-outline" size={22} color="#71717A" />
+          </TouchableOpacity>
+        )}
       </View>
 
       <KeyboardAvoidingView
