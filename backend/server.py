@@ -201,6 +201,10 @@ class PlanEventRequest(BaseModel):
     end_time: Optional[str] = None
     notes: Optional[str] = None
 
+class BriefSettingsRequest(BaseModel):
+    preferred_hour: int = Field(ge=0, le=23, description="Hour of day (0-23) to generate daily brief")
+
+
 # ==================== AUTH ENDPOINTS ====================
 
 @api_router.post("/auth/register")
@@ -609,8 +613,197 @@ async def analyze_plan(plan_id: str, user=Depends(get_current_user)):
     await db.plans.update_one({"id": plan_id}, {"$set": {"safety_analysis": analysis}})
 
     plan["safety_analysis"] = analysis
+
+@api_router.get("/daily-brief")
+async def get_daily_brief(user=Depends(get_current_user), force: bool = False):
+    """
+    Get or generate AI-powered daily safety brief for today's plans.
+    Uses lazy evaluation - generates once per day at user's preferred time.
+    
+    Args:
+        force: If True, regenerate brief even if already generated today
+    """
+    user_id = user["_id"]
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    
+    # Get user settings
+    preferred_hour = user.get("brief_preferred_hour", 6)  # Default 6 AM
+    last_generated = user.get("last_brief_generated")
+    cached_brief = user.get("cached_daily_brief")
+    
+    # Check if we need to regenerate
+    should_regenerate = force
+    
+    if not force:
+        if not last_generated:
+            # Never generated before
+            should_regenerate = True
+        else:
+            last_gen_dt = datetime.fromisoformat(last_generated) if isinstance(last_generated, str) else last_generated
+            last_gen_date = last_gen_dt.date()
+            
+            # Check if it's a new day AND we've passed the preferred hour
+            if last_gen_date < today and now.hour >= preferred_hour:
+                should_regenerate = True
+            elif last_gen_date < today - timedelta(days=1):
+                # If more than a day old, regenerate regardless of hour
+                should_regenerate = True
+    
+    # If we have a cached brief and don't need to regenerate, return it
+    if not should_regenerate and cached_brief:
+        return cached_brief
+    
+    # Generate new brief
+    today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
+    today_end = datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc)
+    
+    # Get today's plans
+    plans = await db.plans.find({
+        "user_id": user_id,
+        "start_time": {
+            "$gte": today_start.isoformat(),
+            "$lte": today_end.isoformat()
+        }
+    }).sort("start_time", 1).to_list(50)
+    
+    if not plans:
+        result = {
+            "brief": "No plans scheduled for today. Stay safe and enjoy your day!",
+            "plans_count": 0,
+            "has_risks": False,
+            "generated_at": now.isoformat(),
+            "next_generation": f"{preferred_hour:02d}:00 tomorrow"
+        }
+        # Cache the result
+        await db.users.update_one(
+            {"_id": user_id},
+            {"$set": {
+                "cached_daily_brief": result,
+                "last_brief_generated": now.isoformat()
+            }}
+        )
+        return result
+    
+    # Format plans for AI analysis
+    plans_summary = []
+    total_risk_score = 0
+    high_risk_count = 0
+    
+    for plan in plans:
+        time_str = plan.get("start_time", "")[:16] if plan.get("start_time") else "Unknown time"
+        safety = plan.get("safety_analysis", {})
+        rating = safety.get("rating", 5)
+        risk_level = safety.get("risk_level", "MODERATE RISK")
+        
+        total_risk_score += rating
+        if rating >= 7:  # High risk (7-10)
+            high_risk_count += 1
+        
+        plans_summary.append({
+            "title": plan.get("title", "Untitled"),
+            "location": plan.get("location_name", "Unknown"),
+            "time": time_str,
+            "rating": rating,
+            "risk_level": risk_level,
+            "assessment": safety.get("assessment", "")
+        })
+    
+    avg_risk = total_risk_score / len(plans) if plans else 5
+    
+    # Generate AI brief
+    prompt = f"""You are a personal safety advisor. Analyze today's schedule and provide a brief safety summary.
+
+Today's Plans ({len(plans)} events):
+{json.dumps(plans_summary, indent=2)}
+
+Overall Risk Profile:
+- Average risk rating: {avg_risk:.1f}/10 (1=safest, 10=most dangerous)
+- High-risk events (7-10): {high_risk_count}
+
+Provide a personalized daily safety brief that includes:
+1. Overall safety assessment for the day (1-2 sentences)
+2. Specific concerns or warnings for high-risk events
+3. Recommended actions or alternatives (if any high-risk events exist)
+4. Best practices for staying safe today
+
+Keep it concise (3-4 paragraphs max), actionable, and reassuring. Don't cause panic.
+Format as plain text, not JSON."""
+
+    system_msg = "You are a helpful NYC safety advisor. Provide practical, reassuring safety advice based on NYPD shooting data analysis."
+    
+    try:
+        messages = [{"role": "user", "content": prompt}]
+        
+        # Get AI brief (non-streaming for this endpoint)
+        brief_text = ""
+        async for chunk in query_ollama(messages, system_msg, stream=False):
+            brief_text += chunk
+        
+        has_risks = high_risk_count > 0 or avg_risk >= 6
+        
+        # Calculate next generation time
+        tomorrow = today + timedelta(days=1)
+        next_gen_time = f"{preferred_hour:02d}:00 tomorrow"
+        
+        result = {
+            "brief": brief_text,
+            "plans_count": len(plans),
+            "has_risks": has_risks,
+            "avg_risk": round(avg_risk, 1),
+            "high_risk_count": high_risk_count,
+            "generated_at": now.isoformat(),
+            "next_generation": next_gen_time
+        }
+        
+        # Cache the result
+        await db.users.update_one(
+            {"_id": user_id},
+            {"$set": {
+                "cached_daily_brief": result,
+                "last_brief_generated": now.isoformat()
+            }}
+        )
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Daily brief error: {e}")
+        return {
+            "brief": f"You have {len(plans)} plan(s) today. Check individual event details for safety information.",
+            "plans_count": len(plans),
+            "has_risks": False,
+            "generated_at": now.isoformat()
+        }
+
     plan.pop("_id", None)
     return plan
+
+@api_router.post("/brief-settings")
+async def update_brief_settings(req: BriefSettingsRequest, user=Depends(get_current_user)):
+    """Update user's daily brief generation preferences"""
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {"brief_preferred_hour": req.preferred_hour}}
+    )
+    return {
+        "message": "Brief settings updated",
+        "preferred_hour": req.preferred_hour,
+        "next_generation": f"Daily brief will generate at {req.preferred_hour:02d}:00"
+    }
+
+@api_router.get("/brief-settings")
+async def get_brief_settings(user=Depends(get_current_user)):
+    """Get user's daily brief generation preferences"""
+    preferred_hour = user.get("brief_preferred_hour", 6)
+    last_generated = user.get("last_brief_generated")
+    
+    return {
+        "preferred_hour": preferred_hour,
+        "last_generated": last_generated,
+        "generation_time": f"{preferred_hour:02d}:00 daily"
+    }
+
 
 async def geocode_location(location_name: str):
     """Geocode a location name to coordinates using Nominatim"""
