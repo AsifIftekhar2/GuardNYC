@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiGet, apiPost, apiDelete } from '../../utils/api';
 
 interface Message {
@@ -42,10 +43,64 @@ export default function ChatScreen() {
     setSending(true);
 
     try {
-      const response = await apiPost('/api/chat', { message: userMsg.content });
-      const assistantMsg: Message = { role: 'assistant', content: response.response };
-      setMessages(prev => [...prev, assistantMsg]);
-    } catch {
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8001';
+      const token = await AsyncStorage.getItem('access_token');
+      
+      // Create placeholder message for streaming
+      const assistantMsgIndex = messages.length + 1;
+      setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+      
+      // Fetch with streaming
+      const response = await fetch(`${backendUrl}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ message: userMsg.content }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get response');
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let fullContent = '';
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.chunk) {
+                  fullContent += data.chunk;
+                  // Update the assistant message with accumulated content
+                  setMessages(prev => {
+                    const updated = [...prev];
+                    updated[assistantMsgIndex] = { role: 'assistant', content: fullContent };
+                    return updated;
+                  });
+                }
+                if (data.done) {
+                  break;
+                }
+              } catch (e) {
+                // Skip invalid JSON
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Chat error:', error);
       setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, I encountered an error. Please try again.' }]);
     } finally {
       setSending(false);

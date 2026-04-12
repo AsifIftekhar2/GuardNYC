@@ -5,15 +5,13 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional
+from typing import List, Optional, AsyncGenerator
 from bson import ObjectId
 from datetime import datetime, timezone, timedelta
-from google import genai
-from google.genai import types
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
@@ -25,17 +23,16 @@ import jwt
 import httpx
 import json
 import re
+import asyncio
 
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Configure Gemini AI Client
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-if GEMINI_API_KEY:
-    genai_client = genai.Client(api_key=GEMINI_API_KEY)
-else:
-    genai_client = None
+# Ollama Configuration
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://100.96.157.82:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "nemotron-3-nano")
+logger.info(f"Ollama configured: {OLLAMA_BASE_URL} with model {OLLAMA_MODEL}")
 
 # MongoDB
 mongo_url = os.environ['MONGO_URL']
@@ -104,6 +101,76 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+# ==================== OLLAMA INTEGRATION ====================
+
+async def query_ollama(messages: list, system_prompt: str = "", stream: bool = True) -> AsyncGenerator[str, None]:
+    """
+    Query local Ollama server with streaming support
+    
+    Args:
+        messages: List of message dicts with 'role' and 'content'
+        system_prompt: Optional system instruction
+        stream: Enable streaming responses (default: True)
+    
+    Yields:
+        Streaming text chunks from Ollama
+    """
+    # Prepare messages with system prompt if provided
+    ollama_messages = []
+    if system_prompt:
+        ollama_messages.append({"role": "system", "content": system_prompt})
+    ollama_messages.extend(messages)
+    
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": ollama_messages,
+        "stream": stream
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream(
+                "POST",
+                f"{OLLAMA_BASE_URL}/api/chat",
+                json=payload
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    logger.error(f"Ollama error: {error_text}")
+                    yield json.dumps({
+                        "error": f"Ollama server error: {response.status_code}",
+                        "message": "Failed to connect to local AI server"
+                    })
+                    return
+                
+                if stream:
+                    async for line in response.aiter_lines():
+                        if line.strip():
+                            try:
+                                chunk = json.loads(line)
+                                if "message" in chunk and "content" in chunk["message"]:
+                                    yield chunk["message"]["content"]
+                                if chunk.get("done", False):
+                                    break
+                            except json.JSONDecodeError:
+                                continue
+                else:
+                    data = await response.aread()
+                    result = json.loads(data)
+                    if "message" in result and "content" in result["message"]:
+                        yield result["message"]["content"]
+    
+    except httpx.ConnectError:
+        logger.error(f"Cannot connect to Ollama at {OLLAMA_BASE_URL}")
+        yield json.dumps({
+            "error": "Connection failed",
+            "message": f"Cannot reach Ollama server at {OLLAMA_BASE_URL}. Please check Tailscale connection."
+        })
+    except Exception as e:
+        logger.error(f"Ollama query error: {e}")
+        yield json.dumps({"error": str(e), "message": "AI query failed"})
 
 # ==================== MODELS ====================
 
@@ -345,20 +412,17 @@ Provide a JSON response with these exact keys:
 RESPOND ONLY WITH VALID JSON, no markdown."""
 
     try:
-        # Use Google GenAI (new API)
-        if not genai_client:
-            raise Exception("Gemini API key not configured")
+        # Use local Ollama server
+        system_prompt = "You are an expert NYC safety analyst. Provide accurate, data-driven safety assessments based on shooting incident data. Always respond in valid JSON format only."
         
-        response = genai_client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction="You are an expert NYC safety analyst. Provide accurate, data-driven safety assessments based on shooting incident data. Always respond in valid JSON format only.",
-                temperature=0.7
-            )
-        )
-        response_text = response.text
+        messages = [{"role": "user", "content": prompt}]
+        
+        # Collect full response (non-streaming for JSON parsing)
+        response_text = ""
+        async for chunk in query_ollama(messages, system_prompt, stream=False):
+            response_text += chunk
 
+        # Parse JSON from response
         try:
             json_match = re.search(r'\{[\s\S]*\}', response_text)
             if json_match:
@@ -412,10 +476,13 @@ async def chat_with_agent(req: ChatMessageRequest, user=Depends(get_current_user
     ).sort("created_at", -1).limit(10).to_list(10)
     history.reverse()
 
-    context_messages = ""
+    # Build conversation history for Ollama
+    messages = []
     for msg in history:
-        role = "User" if msg["role"] == "user" else "Agent"
-        context_messages += f"{role}: {msg['content']}\n"
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    
+    # Add current user message
+    messages.append({"role": "user", "content": req.message})
 
     system_msg = """You are the Agentic Safeguard AI, an expert NYC safety advisor powered by real NYPD shooting incident data (2006-present).
 
@@ -430,35 +497,26 @@ Be helpful, factual, and reassuring. Focus on actionable advice. Don't cause unn
 When locations are mentioned, reference shooting data patterns.
 Keep responses concise but thorough - 2-4 paragraphs max."""
 
-    prompt = f"""Previous conversation:
-{context_messages}
-
-User's message: {req.message}
-
-Respond helpfully about NYC safety."""
-
     try:
-        # Use Google GenAI (new API)
-        if not genai_client:
-            raise Exception("Gemini API key not configured")
+        # Stream response from Ollama
+        async def stream_response():
+            full_response = ""
+            async for chunk in query_ollama(messages, system_msg, stream=True):
+                full_response += chunk
+                # Send chunk to client
+                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            
+            # Save conversation to database after streaming completes
+            now = datetime.now(timezone.utc)
+            await db.chat_messages.insert_many([
+                {"user_id": user_id, "role": "user", "content": req.message, "created_at": now.isoformat()},
+                {"user_id": user_id, "role": "assistant", "content": full_response, "created_at": (now + timedelta(milliseconds=1)).isoformat()}
+            ])
+            
+            yield f"data: {json.dumps({'done': True})}\n\n"
         
-        response = genai_client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_msg,
-                temperature=0.8
-            )
-        )
-        response_text = response.text
-
-        now = datetime.now(timezone.utc)
-        await db.chat_messages.insert_many([
-            {"user_id": user_id, "role": "user", "content": req.message, "created_at": now.isoformat()},
-            {"user_id": user_id, "role": "assistant", "content": response_text, "created_at": (now + timedelta(milliseconds=1)).isoformat()}
-        ])
-
-        return {"response": response_text}
+        return StreamingResponse(stream_response(), media_type="text/event-stream")
+    
     except Exception as e:
         logger.error(f"Chat error: {e}")
         raise HTTPException(status_code=500, detail="AI agent temporarily unavailable. Please try again.")
