@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional
 from bson import ObjectId
 from datetime import datetime, timezone, timedelta
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
@@ -29,10 +30,12 @@ import re
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Configure Gemini AI
+# Configure Gemini AI Client
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    genai_client = genai.Client(api_key=GEMINI_API_KEY)
+else:
+    genai_client = None
 
 # MongoDB
 mongo_url = os.environ['MONGO_URL']
@@ -339,13 +342,18 @@ Provide a JSON response with these exact keys:
 RESPOND ONLY WITH VALID JSON, no markdown."""
 
     try:
-        # Use Google Generative AI directly
-        model = genai.GenerativeModel(
-            model_name='gemini-1.5-flash',
-            system_instruction="You are an expert NYC safety analyst. Provide accurate, data-driven safety assessments based on shooting incident data. Always respond in valid JSON format only."
-        )
+        # Use Google GenAI (new API)
+        if not genai_client:
+            raise Exception("Gemini API key not configured")
         
-        response = model.generate_content(prompt)
+        response = genai_client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction="You are an expert NYC safety analyst. Provide accurate, data-driven safety assessments based on shooting incident data. Always respond in valid JSON format only.",
+                temperature=0.7
+            )
+        )
         response_text = response.text
 
         try:
@@ -427,13 +435,18 @@ User's message: {req.message}
 Respond helpfully about NYC safety."""
 
     try:
-        # Use Google Generative AI directly
-        model = genai.GenerativeModel(
-            model_name='gemini-1.5-flash',
-            system_instruction=system_msg
-        )
+        # Use Google GenAI (new API)
+        if not genai_client:
+            raise Exception("Gemini API key not configured")
         
-        response = model.generate_content(prompt)
+        response = genai_client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_msg,
+                temperature=0.8
+            )
+        )
         response_text = response.text
 
         now = datetime.now(timezone.utc)

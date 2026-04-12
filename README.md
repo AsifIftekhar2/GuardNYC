@@ -32,7 +32,7 @@ A React Native mobile application that helps users assess and navigate safety ri
 - **FastAPI** (Python)
 - **MongoDB** (database)
 - **Motor** (async MongoDB driver)
-- **Emergent Integrations** (Gemini 3 Flash AI)
+- **Google GenAI** (Gemini 1.5 Flash AI)
 
 ### Data Source
 - **NYC OpenData** - NYPD Shooting Incident Data API
@@ -309,6 +309,12 @@ yarn start --clear
 - Check if backend is running on port 8001
 - Verify EXPO_PUBLIC_BACKEND_URL in `/frontend/.env`
 - Check backend logs for errors
+
+### AI Features Not Working
+- Ensure `GEMINI_API_KEY` is set in `/backend/.env`
+- Get a free API key from: https://aistudio.google.com/app/apikey
+- Restart backend after adding the key: `supervisorctl restart backend`
+- App uses **Google GenAI** (google-genai package) - latest stable API
 
 ---
 
