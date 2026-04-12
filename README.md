@@ -110,6 +110,7 @@ GEMINI_API_KEY=your-google-gemini-api-key
 GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 GOOGLE_REDIRECT_URI=http://localhost:8001/api/google/callback
+FRONTEND_URL=http://localhost:8081
 ```
 
 **Frontend** (`/frontend/.env`):

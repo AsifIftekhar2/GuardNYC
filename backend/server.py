@@ -52,6 +52,9 @@ GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
 GOOGLE_REDIRECT_URI = os.environ.get('GOOGLE_REDIRECT_URI', 'https://load-app-10.preview.emergentagent.com/api/google/callback')
 GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 
+# Frontend URL for redirects
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:8081')
+
 # App
 app = FastAPI(title="Agentic Safeguard API")
 api_router = APIRouter(prefix="/api")
@@ -749,9 +752,9 @@ async def google_callback(code: str, state: str):
             except Exception as e:
                 logger.error(f"Initial sync failed: {e}")
             
-            # Redirect back to app with success
+            # Redirect back to frontend with success
             return RedirectResponse(
-                url=f"/?google_calendar=connected",
+                url=f"{FRONTEND_URL}/?google_calendar=connected",
                 status_code=302
             )
     except Exception as e:
