@@ -113,7 +113,7 @@ export default function ChatScreen() {
             <View style={styles.welcomeIconWrap}>
               <Ionicons name="shield-checkmark" size={48} color="#0EA5E9" />
             </View>
-            <Text style={styles.welcomeTitle}>Sentry - Your NYC Safety Agent</Text>
+            <Text style={styles.welcomeTitle}>Ask Sentry - Your NYC Safety Agent</Text>
             <Text style={styles.welcomeDesc}>
               Ask me about safety in any NYC neighborhood, location, or plan. I use real NYPD shooting data to provide informed assessments.
             </Text>
