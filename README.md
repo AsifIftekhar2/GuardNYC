@@ -106,7 +106,7 @@ DB_NAME=agentic_safeguard
 JWT_SECRET=your-secret-key-here-min-32-characters
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=admin123
-EMERGENT_LLM_KEY=your-emergent-llm-key
+GEMINI_API_KEY=your-google-gemini-api-key
 GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 GOOGLE_REDIRECT_URI=http://localhost:8001/api/google/callback
@@ -322,8 +322,7 @@ yarn start --clear
 ### API Keys Required
 1. **Google Gemini API Key** - For AI features (Gemini 1.5 Flash)
    - Get from: [Google AI Studio](https://aistudio.google.com/app/apikey)
-   - Set as `EMERGENT_LLM_KEY` in backend `.env`
-   - **Note**: You can use the Emergent LLM Key or your own Google Gemini API key
+   - Set as `GEMINI_API_KEY` in backend `.env`
 2. **Google OAuth Credentials** - For calendar integration
    - Get from: [Google Cloud Console](https://console.cloud.google.com)
 
