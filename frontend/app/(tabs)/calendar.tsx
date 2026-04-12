@@ -178,6 +178,8 @@ export default function CalendarScreen() {
       const result = await apiPost('/api/google/sync', {});
       await loadPlans();
       await checkGoogleStatus();
+      // Trigger daily brief regeneration
+      await apiGet('/api/daily-brief');
       alert(`Synced ${result.count} events from Google Calendar`);
     } catch (error: any) {
       alert('Sync failed: ' + (error.message || 'Unknown error'));
@@ -232,6 +234,8 @@ export default function CalendarScreen() {
       setNewTime(new Date());
       setNewDateStr('');
       setNewTimeStr('');
+      // Trigger daily brief regeneration
+      apiGet('/api/daily-brief').catch(() => {});
     } catch (error: any) {
       alert(error.message || 'Failed to add plan');
     } finally {

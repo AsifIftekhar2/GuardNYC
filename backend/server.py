@@ -609,6 +609,103 @@ async def analyze_plan(plan_id: str, user=Depends(get_current_user)):
     await db.plans.update_one({"id": plan_id}, {"$set": {"safety_analysis": analysis}})
 
     plan["safety_analysis"] = analysis
+
+@api_router.get("/daily-brief")
+async def get_daily_brief(user=Depends(get_current_user)):
+    """Generate AI-powered daily safety brief for today's plans"""
+    today = datetime.now(timezone.utc).date()
+    today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
+    today_end = datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc)
+    
+    # Get today's plans
+    plans = await db.plans.find({
+        "user_id": user["_id"],
+        "start_time": {
+            "$gte": today_start.isoformat(),
+            "$lte": today_end.isoformat()
+        }
+    }).sort("start_time", 1).to_list(50)
+    
+    if not plans:
+        return {
+            "brief": "No plans scheduled for today. Stay safe and enjoy your day!",
+            "plans_count": 0,
+            "has_risks": False
+        }
+    
+    # Format plans for AI analysis
+    plans_summary = []
+    total_risk_score = 0
+    high_risk_count = 0
+    
+    for plan in plans:
+        time_str = plan.get("start_time", "")[:16] if plan.get("start_time") else "Unknown time"
+        safety = plan.get("safety_analysis", {})
+        rating = safety.get("rating", 5)
+        risk_level = safety.get("risk_level", "MODERATE RISK")
+        
+        total_risk_score += rating
+        if rating >= 7:  # High risk (7-10)
+            high_risk_count += 1
+        
+        plans_summary.append({
+            "title": plan.get("title", "Untitled"),
+            "location": plan.get("location_name", "Unknown"),
+            "time": time_str,
+            "rating": rating,
+            "risk_level": risk_level,
+            "assessment": safety.get("assessment", "")
+        })
+    
+    avg_risk = total_risk_score / len(plans) if plans else 5
+    
+    # Generate AI brief
+    prompt = f"""You are a personal safety advisor. Analyze today's schedule and provide a brief safety summary.
+
+Today's Plans ({len(plans)} events):
+{json.dumps(plans_summary, indent=2)}
+
+Overall Risk Profile:
+- Average risk rating: {avg_risk:.1f}/10 (1=safest, 10=most dangerous)
+- High-risk events (7-10): {high_risk_count}
+
+Provide a personalized daily safety brief that includes:
+1. Overall safety assessment for the day (1-2 sentences)
+2. Specific concerns or warnings for high-risk events
+3. Recommended actions or alternatives (if any high-risk events exist)
+4. Best practices for staying safe today
+
+Keep it concise (3-4 paragraphs max), actionable, and reassuring. Don't cause panic.
+Format as plain text, not JSON."""
+
+    system_msg = "You are a helpful NYC safety advisor. Provide practical, reassuring safety advice based on NYPD shooting data analysis."
+    
+    try:
+        messages = [{"role": "user", "content": prompt}]
+        
+        # Get AI brief (non-streaming for this endpoint)
+        brief_text = ""
+        async for chunk in query_ollama(messages, system_msg, stream=False):
+            brief_text += chunk
+        
+        has_risks = high_risk_count > 0 or avg_risk >= 6
+        
+        return {
+            "brief": brief_text,
+            "plans_count": len(plans),
+            "has_risks": has_risks,
+            "avg_risk": round(avg_risk, 1),
+            "high_risk_count": high_risk_count
+        }
+    
+    except Exception as e:
+        logger.error(f"Daily brief error: {e}")
+        return {
+            "brief": f"You have {len(plans)} plan(s) today. Check individual event details for safety information.",
+            "plans_count": len(plans),
+            "has_risks": False
+        }
+
     plan.pop("_id", None)
     return plan
 
