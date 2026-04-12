@@ -164,13 +164,14 @@ async def query_ollama(messages: list, system_prompt: str = "", stream: bool = T
     
     except httpx.ConnectError:
         logger.error(f"Cannot connect to Ollama at {OLLAMA_BASE_URL}")
-        yield json.dumps({
-            "error": "Connection failed",
-            "message": f"Cannot reach Ollama server at {OLLAMA_BASE_URL}. Please check Tailscale connection."
-        })
+        # Return empty string to trigger fallback logic
+        return
+    except httpx.TimeoutException:
+        logger.error(f"Ollama timeout at {OLLAMA_BASE_URL}")
+        return
     except Exception as e:
         logger.error(f"Ollama query error: {e}")
-        yield json.dumps({"error": str(e), "message": "AI query failed"})
+        return
 
 # ==================== MODELS ====================
 
@@ -456,11 +457,15 @@ async def run_safety_analysis(latitude: float, longitude: float, location_name: 
         "longitude": {"$gte": longitude - radius, "$lte": longitude + radius}
     }, {"_id": 0}).to_list(500)
     
-    # Get complaint data within radius
-    complaints = await db.complaint_data.find({
-        "latitude": {"$gte": latitude - radius, "$lte": latitude + radius},
-        "longitude": {"$gte": longitude - radius, "$lte": longitude + radius}
-    }, {"_id": 0}).to_list(1000)
+    # Get complaint data within radius (handle missing collection gracefully)
+    try:
+        complaints = await db.complaint_data.find({
+            "latitude": {"$gte": latitude - radius, "$lte": latitude + radius},
+            "longitude": {"$gte": longitude - radius, "$lte": longitude + radius}
+        }, {"_id": 0}).to_list(1000)
+    except Exception as e:
+        logger.warning(f"Complaint data not available: {e}")
+        complaints = []
     
     # Shooting statistics
     total_shootings = len(shootings)
@@ -501,7 +506,22 @@ async def run_safety_analysis(latitude: float, longitude: float, location_name: 
     shooting_density = (total_shootings / area_factor) if total_shootings > 0 else 0
     crime_density = (total_complaints / area_factor) if total_complaints > 0 else 0
 
-    prompt = f"""Analyze the safety of this NYC location based on comprehensive crime data:
+    # Build appropriate prompt based on data availability
+    if total_complaints > 0:
+        complaint_section = f"""
+COMPLAINT DATA (within 400m):
+- Total complaints: {total_complaints}
+- Felonies: {felonies}
+- Misdemeanors: {misdemeanors}
+- Violations: {violations}
+- Crime density: {crime_density:.1f} per 100k sq meters"""
+        context_note = "Shootings are historical data (2006-present). Complaints include all reported crimes (last 3 years). 400m radius focuses on immediate neighborhood."
+    else:
+        complaint_section = """
+COMPLAINT DATA: Not yet synced (analysis based on shooting data only)"""
+        context_note = "Analysis based on shooting data only (2006-present). 400m radius focuses on immediate neighborhood. Complaint data will provide more context when synced."
+
+    prompt = f"""Analyze the safety of this NYC location based on crime data:
 
 Location: {location_name} (Lat: {latitude:.4f}, Lon: {longitude:.4f})
 Search Radius: 400 meters (focused local area)
@@ -511,34 +531,25 @@ SHOOTING DATA (within 400m):
 - Fatal shootings: {murders}
 - Shooting density: {shooting_density:.1f} per 100k sq meters
 - Time distribution: Morning({time_counts['morning']}), Afternoon({time_counts['afternoon']}), Evening({time_counts['evening']}), Night({time_counts['night']})
+{complaint_section}
 
-COMPLAINT DATA (within 400m):
-- Total complaints: {total_complaints}
-- Felonies: {felonies}
-- Misdemeanors: {misdemeanors}
-- Violations: {violations}
-- Crime density: {crime_density:.1f} per 100k sq meters
-
-CONTEXT:
-- Shootings are historical data (2006-present), representing serious violent crime
-- Complaints include all reported crimes (last 3 years), showing overall crime activity
-- 400m radius focuses on immediate neighborhood safety
+CONTEXT: {context_note}
 
 Provide a JSON response with these exact keys:
 - "rating": number 1-10 where 1=SAFEST/LOWEST RISK and 10=MOST DANGEROUS/HIGHEST RISK
   * Use this balanced scale:
-  * 1-2: Very safe (0-2 shootings, minimal complaints, mostly violations)
-  * 3-4: Safe (2-5 shootings, moderate complaints, mostly misdemeanors)
-  * 5-6: Moderate risk (5-10 shootings, higher complaints, some felonies)
-  * 7-8: Elevated risk (10-20 shootings, many complaints, frequent felonies)
-  * 9-10: High risk (20+ shootings, very high complaints, many violent felonies)
+  * 1-2: Very safe (0-2 shootings, minimal complaints)
+  * 3-4: Safe (2-5 shootings, moderate complaints)
+  * 5-6: Moderate risk (5-10 shootings, higher complaints)
+  * 7-8: Elevated risk (10-20 shootings, many complaints)
+  * 9-10: High risk (20+ shootings, very high complaints)
 - "risk_level": "LOW RISK" or "MODERATE RISK" or "HIGH RISK"
 - "assessment": brief 2-3 sentence assessment
 - "recommendations": array of 3-4 safety tips
 - "best_times": when to visit
 - "avoid_times": when to avoid
 
-IMPORTANT: Be balanced and realistic. Don't overstate risk. Consider both datasets together. A location with few shootings but many minor complaints is still relatively safe. Focus on violent crime for serious risk assessment.
+IMPORTANT: Be balanced and realistic. Don't overstate risk. Focus on violent crime (shootings) for serious risk assessment.
 
 RESPOND ONLY WITH VALID JSON, no markdown."""
 
@@ -552,6 +563,10 @@ RESPOND ONLY WITH VALID JSON, no markdown."""
         response_text = ""
         async for chunk in query_ollama(messages, system_prompt, stream=False):
             response_text += chunk
+
+        # If Ollama isn't available or returned empty, use fallback
+        if not response_text or len(response_text) < 10:
+            raise Exception("Ollama unavailable, using fallback")
 
         # Parse JSON from response
         try:
@@ -591,7 +606,7 @@ RESPOND ONLY WITH VALID JSON, no markdown."""
     analysis["latitude"] = latitude
     analysis["longitude"] = longitude
     analysis["location_name"] = location_name
-    analysis["incident_count"] = total_nearby
+    analysis["incident_count"] = total_shootings
     analysis["analyzed_at"] = datetime.now(timezone.utc).isoformat()
     return analysis
 
