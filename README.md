@@ -320,8 +320,10 @@ yarn start --clear
 - Rotate secrets regularly in production
 
 ### API Keys Required
-1. **Emergent LLM Key** - For AI features (Gemini 3 Flash)
-   - Get from: [Emergent Platform](https://emergentagent.com)
+1. **Google Gemini API Key** - For AI features (Gemini 1.5 Flash)
+   - Get from: [Google AI Studio](https://aistudio.google.com/app/apikey)
+   - Set as `EMERGENT_LLM_KEY` in backend `.env`
+   - **Note**: You can use the Emergent LLM Key or your own Google Gemini API key
 2. **Google OAuth Credentials** - For calendar integration
    - Get from: [Google Cloud Console](https://console.cloud.google.com)
 
