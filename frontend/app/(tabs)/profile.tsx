@@ -1,42 +1,77 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  ActivityIndicator, RefreshControl,
+  ActivityIndicator, RefreshControl, Modal, Picker,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
-import { apiGet } from '../../utils/api';
+import { apiGet, apiPost } from '../../utils/api';
 import { useFocusEffect } from '@react-navigation/native';
 import React as ReactNative from 'react';
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
   const [dailyBrief, setDailyBrief] = useState<any>(null);
+  const [briefSettings, setBriefSettings] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [selectedHour, setSelectedHour] = useState(6);
 
   useFocusEffect(
     ReactNative.useCallback(() => {
-      loadDailyBrief();
+      loadData();
     }, [])
   );
 
-  const loadDailyBrief = async () => {
+  const loadData = async () => {
     try {
-      const brief = await apiGet('/api/daily-brief');
+      const [brief, settings] = await Promise.all([
+        apiGet('/api/daily-brief'),
+        apiGet('/api/brief-settings')
+      ]);
       setDailyBrief(brief);
+      setBriefSettings(settings);
+      setSelectedHour(settings.preferred_hour);
     } catch (error) {
-      console.error('Failed to load daily brief:', error);
+      console.error('Failed to load data:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
+  const loadDailyBrief = async (force = false) => {
+    try {
+      const url = force ? '/api/daily-brief?force=true' : '/api/daily-brief';
+      const brief = await apiGet(url);
+      setDailyBrief(brief);
+    } catch (error) {
+      console.error('Failed to load daily brief:', error);
+    }
+  };
+
   const onRefresh = () => {
     setRefreshing(true);
-    loadDailyBrief();
+    loadData();
+  };
+
+  const updateBriefTime = async () => {
+    try {
+      await apiPost('/api/brief-settings', { preferred_hour: selectedHour });
+      await loadData();
+      setShowSettings(false);
+    } catch (error) {
+      console.error('Failed to update settings:', error);
+      alert('Failed to update settings');
+    }
+  };
+
+  const formatTime = (hour: number) => {
+    const period = hour >= 12 ? 'PM' : 'AM';
+    const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+    return `${displayHour}:00 ${period}`;
   };
 
   return (
@@ -68,6 +103,12 @@ export default function ProfileScreen() {
         <View style={styles.sectionHeader}>
           <Ionicons name="today" size={20} color="#0EA5E9" />
           <Text style={styles.sectionTitle}>TODAY'S BRIEF</Text>
+          <TouchableOpacity 
+            onPress={() => setShowSettings(true)}
+            style={styles.settingsIcon}
+          >
+            <Ionicons name="settings-outline" size={18} color="#71717A" />
+          </TouchableOpacity>
         </View>
 
         {loading ? (
@@ -104,13 +145,19 @@ export default function ProfileScreen() {
             
             <Text style={styles.briefText}>{dailyBrief.brief}</Text>
             
+            {dailyBrief.next_generation && (
+              <Text style={styles.nextGenText}>
+                📅 Next brief: {dailyBrief.next_generation}
+              </Text>
+            )}
+            
             <TouchableOpacity 
               style={styles.refreshButton}
-              onPress={loadDailyBrief}
+              onPress={() => loadDailyBrief(true)}
               activeOpacity={0.7}
             >
               <Ionicons name="refresh" size={16} color="#0EA5E9" />
-              <Text style={styles.refreshButtonText}>Refresh Brief</Text>
+              <Text style={styles.refreshButtonText}>Regenerate Now</Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -134,6 +181,61 @@ export default function ProfileScreen() {
           AI-Powered NYC Safety Intelligence
         </Text>
       </ScrollView>
+
+      <Modal
+        visible={showSettings}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowSettings(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Brief Generation Time</Text>
+              <TouchableOpacity onPress={() => setShowSettings(false)}>
+                <Ionicons name="close" size={24} color="#71717A" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalDescription}>
+              Your daily brief will be generated once per day at your preferred time when you next open the app.
+            </Text>
+
+            <View style={styles.pickerContainer}>
+              <Text style={styles.pickerLabel}>Generation Time:</Text>
+              <Picker
+                selectedValue={selectedHour}
+                onValueChange={(value) => setSelectedHour(value)}
+                style={styles.picker}
+              >
+                {Array.from({ length: 24 }, (_, i) => (
+                  <Picker.Item 
+                    key={i} 
+                    label={formatTime(i)} 
+                    value={i}
+                    color="#FFFFFF"
+                  />
+                ))}
+              </Picker>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity 
+                style={styles.cancelButton}
+                onPress={() => setShowSettings(false)}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.saveButton}
+                onPress={updateBriefTime}
+              >
+                <Text style={styles.saveButtonText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -167,7 +269,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20, paddingTop: 28, paddingBottom: 12,
     flexDirection: 'row', alignItems: 'center', gap: 8,
   },
-  sectionTitle: { color: '#71717A', fontSize: 11, fontWeight: '600', letterSpacing: 2 },
+  sectionTitle: { color: '#71717A', fontSize: 11, fontWeight: '600', letterSpacing: 2, flex: 1 },
+  settingsIcon: { padding: 4 },
   loadingContainer: {
     alignItems: 'center', justifyContent: 'center',
     paddingVertical: 40,
@@ -199,6 +302,9 @@ const styles = StyleSheet.create({
   briefText: {
     color: '#D4D4D8', fontSize: 14, lineHeight: 22,
   },
+  nextGenText: {
+    color: '#71717A', fontSize: 12, marginTop: 12, fontStyle: 'italic',
+  },
   refreshButton: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 6, marginTop: 16, paddingVertical: 10,
@@ -218,4 +324,32 @@ const styles = StyleSheet.create({
     color: '#3F3F46', fontSize: 11, textAlign: 'center',
     marginTop: 24, lineHeight: 18,
   },
+  modalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.8)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#18181B', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 24, borderTopWidth: 1, borderColor: '#27272A',
+  },
+  modalHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: 12,
+  },
+  modalTitle: { color: '#FAFAFA', fontSize: 18, fontWeight: '600' },
+  modalDescription: { color: '#A1A1AA', fontSize: 14, lineHeight: 20, marginBottom: 24 },
+  pickerContainer: { marginBottom: 24 },
+  pickerLabel: { color: '#D4D4D8', fontSize: 14, fontWeight: '500', marginBottom: 8 },
+  picker: { backgroundColor: '#27272A', borderRadius: 12, color: '#FFFFFF' },
+  modalActions: { flexDirection: 'row', gap: 12 },
+  cancelButton: {
+    flex: 1, paddingVertical: 14, borderRadius: 12,
+    borderWidth: 1, borderColor: '#27272A', alignItems: 'center',
+  },
+  cancelButtonText: { color: '#A1A1AA', fontSize: 15, fontWeight: '500' },
+  saveButton: {
+    flex: 1, paddingVertical: 14, borderRadius: 12,
+    backgroundColor: '#0EA5E9', alignItems: 'center',
+  },
+  saveButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
 });
