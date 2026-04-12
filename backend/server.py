@@ -315,6 +315,82 @@ async def sync_shooting_data():
             logger.info(f"Synced {len(records)} shooting records")
         return len(records)
 
+
+# Complaint Data URLs
+NYC_COMPLAINTS_HISTORIC_URL = "https://data.cityofnewyork.us/resource/qgea-i56i.json"
+NYC_COMPLAINTS_CURRENT_URL = "https://data.cityofnewyork.us/resource/5uac-w243.json"
+
+async def sync_complaint_data():
+    """Fetch complaint data from NYC OpenData SODA API and cache in MongoDB"""
+    logger.info("Syncing complaint data from NYC OpenData...")
+    
+    # Get recent years (last 3 years for efficiency)
+    current_year = datetime.now(timezone.utc).year
+    years_to_fetch = [current_year, current_year - 1, current_year - 2]
+    
+    async with httpx.AsyncClient() as http_client:
+        all_records = []
+        
+        for year in years_to_fetch:
+            try:
+                # Fetch from current year dataset if year is current, otherwise historic
+                url = NYC_COMPLAINTS_CURRENT_URL if year == current_year else NYC_COMPLAINTS_HISTORIC_URL
+                
+                params = {
+                    "$select": "cmplnt_num,cmplnt_fr_dt,cmplnt_fr_tm,latitude,longitude,boro_nm,ofns_desc,law_cat_cd",
+                    "$where": f"cmplnt_fr_dt >= '{year}-01-01T00:00:00' AND cmplnt_fr_dt < '{year+1}-01-01T00:00:00' AND latitude IS NOT NULL AND longitude IS NOT NULL",
+                    "$limit": 10000,
+                    "$order": "cmplnt_fr_dt DESC"
+                }
+                
+                response = await http_client.get(url, params=params, timeout=120)
+                if response.status_code != 200:
+                    logger.warning(f"Failed to fetch complaint data for {year}: {response.status_code}")
+                    continue
+                
+                data = response.json()
+                year_records = []
+                
+                for item in data:
+                    try:
+                        lat = float(item.get("latitude", 0))
+                        lon = float(item.get("longitude", 0))
+                        if lat == 0 or lon == 0:
+                            continue
+                        
+                        record = {
+                            "complaint_num": item.get("cmplnt_num", ""),
+                            "complaint_date": item.get("cmplnt_fr_dt", "")[:10] if item.get("cmplnt_fr_dt") else "",
+                            "complaint_time": item.get("cmplnt_fr_tm", ""),
+                            "latitude": lat,
+                            "longitude": lon,
+                            "boro": item.get("boro_nm", "UNKNOWN").upper(),
+                            "offense": item.get("ofns_desc", "UNKNOWN"),
+                            "severity": item.get("law_cat_cd", "UNKNOWN"),  # FELONY, MISDEMEANOR, VIOLATION
+                            "year": year
+                        }
+                        year_records.append(record)
+                    except (ValueError, TypeError) as e:
+                        continue
+                
+                logger.info(f"Fetched {len(year_records)} complaints for {year}")
+                all_records.extend(year_records)
+                
+            except Exception as e:
+                logger.error(f"Error fetching complaints for {year}: {e}")
+                continue
+        
+        # Bulk upsert to database
+        if all_records:
+            await db.complaint_data.delete_many({})  # Clear old data
+            await db.complaint_data.insert_many(all_records)
+            await db.complaint_data.create_index([("latitude", 1), ("longitude", 1)])
+            await db.complaint_data.create_index([("boro", 1)])
+            await db.complaint_data.create_index([("severity", 1)])
+            logger.info(f"Synced {len(all_records)} complaint records")
+        
+        return len(all_records)
+
 @api_router.get("/shootings")
 async def get_shootings(boro: Optional[str] = None, year: Optional[int] = None, limit: int = 3000):
     count = await db.shooting_data.count_documents({})
@@ -338,8 +414,15 @@ async def get_shootings(boro: Optional[str] = None, year: Optional[int] = None, 
 
 @api_router.post("/shootings/sync")
 async def trigger_sync():
+    """Manually trigger shooting data sync"""
     count = await sync_shooting_data()
     return {"message": f"Synced {count} shooting records", "count": count}
+
+@api_router.post("/complaints/sync")
+async def trigger_complaint_sync():
+    """Manually trigger complaint data sync"""
+    count = await sync_complaint_data()
+    return {"message": f"Synced {count} complaint records", "count": count}
 
 @api_router.get("/shootings/heatmap")
 async def get_heatmap_data(limit: int = 5000):
@@ -360,18 +443,38 @@ async def get_heatmap_data(limit: int = 5000):
 # ==================== SAFETY ANALYSIS ====================
 
 async def run_safety_analysis(latitude: float, longitude: float, location_name: str, time_of_day: str = "") -> dict:
-    """Core safety analysis function - reusable"""
-    radius = 0.01  # ~1km
-    nearby = await db.shooting_data.find({
+    """
+    Enhanced safety analysis using both shooting and complaint data
+    Radius: 400m (~0.0036 degrees latitude/longitude)
+    """
+    # 400m radius in degrees (approximately)
+    radius = 0.0036  # ~400 meters
+    
+    # Get shooting data within radius
+    shootings = await db.shooting_data.find({
         "latitude": {"$gte": latitude - radius, "$lte": latitude + radius},
         "longitude": {"$gte": longitude - radius, "$lte": longitude + radius}
     }, {"_id": 0}).to_list(500)
-
-    total_nearby = len(nearby)
-    murders_nearby = sum(1 for s in nearby if s.get("is_murder"))
-
+    
+    # Get complaint data within radius
+    complaints = await db.complaint_data.find({
+        "latitude": {"$gte": latitude - radius, "$lte": latitude + radius},
+        "longitude": {"$gte": longitude - radius, "$lte": longitude + radius}
+    }, {"_id": 0}).to_list(1000)
+    
+    # Shooting statistics
+    total_shootings = len(shootings)
+    murders = sum(1 for s in shootings if s.get("is_murder"))
+    
+    # Complaint statistics by severity
+    felonies = sum(1 for c in complaints if c.get("severity") == "FELONY")
+    misdemeanors = sum(1 for c in complaints if c.get("severity") == "MISDEMEANOR")
+    violations = sum(1 for c in complaints if c.get("severity") == "VIOLATION")
+    total_complaints = len(complaints)
+    
+    # Time distribution for shootings
     time_counts = {"morning": 0, "afternoon": 0, "evening": 0, "night": 0}
-    for s in nearby:
+    for s in shootings:
         t = s.get("occur_time", "")
         if t:
             try:
@@ -386,38 +489,62 @@ async def run_safety_analysis(latitude: float, longitude: float, location_name: 
                     time_counts["night"] += 1
             except (ValueError, IndexError):
                 pass
-
+    
+    # Borough stats
     boro_stats = {}
-    for s in nearby:
+    for s in shootings:
         b = s.get("boro", "UNKNOWN")
         boro_stats[b] = boro_stats.get(b, 0) + 1
+    
+    # Calculate crime density (incidents per 100k sq meters, 400m radius = ~502,000 sq meters)
+    area_factor = 5.02  # to normalize per 100k sq meters
+    shooting_density = (total_shootings / area_factor) if total_shootings > 0 else 0
+    crime_density = (total_complaints / area_factor) if total_complaints > 0 else 0
 
-    prompt = f"""Analyze the safety of this NYC location based on shooting incident data:
+    prompt = f"""Analyze the safety of this NYC location based on comprehensive crime data:
 
 Location: {location_name} (Lat: {latitude:.4f}, Lon: {longitude:.4f})
-Time of visit: {time_of_day if time_of_day else 'Not specified'}
+Search Radius: 400 meters (focused local area)
 
-Shooting data within ~1km radius:
-- Total incidents: {total_nearby}
-- Fatal incidents: {murders_nearby}
-- Borough breakdown: {json.dumps(boro_stats)}
+SHOOTING DATA (within 400m):
+- Total shooting incidents: {total_shootings}
+- Fatal shootings: {murders}
+- Shooting density: {shooting_density:.1f} per 100k sq meters
 - Time distribution: Morning({time_counts['morning']}), Afternoon({time_counts['afternoon']}), Evening({time_counts['evening']}), Night({time_counts['night']})
 
-Recent incidents nearby: {json.dumps([{"desc": s.get("location_desc",""), "time": s.get("occur_time",""), "date": s.get("occur_date","")[:10] if s.get("occur_date") else ""} for s in nearby[:8]])}
+COMPLAINT DATA (within 400m):
+- Total complaints: {total_complaints}
+- Felonies: {felonies}
+- Misdemeanors: {misdemeanors}
+- Violations: {violations}
+- Crime density: {crime_density:.1f} per 100k sq meters
+
+CONTEXT:
+- Shootings are historical data (2006-present), representing serious violent crime
+- Complaints include all reported crimes (last 3 years), showing overall crime activity
+- 400m radius focuses on immediate neighborhood safety
 
 Provide a JSON response with these exact keys:
 - "rating": number 1-10 where 1=SAFEST/LOWEST RISK and 10=MOST DANGEROUS/HIGHEST RISK
+  * Use this balanced scale:
+  * 1-2: Very safe (0-2 shootings, minimal complaints, mostly violations)
+  * 3-4: Safe (2-5 shootings, moderate complaints, mostly misdemeanors)
+  * 5-6: Moderate risk (5-10 shootings, higher complaints, some felonies)
+  * 7-8: Elevated risk (10-20 shootings, many complaints, frequent felonies)
+  * 9-10: High risk (20+ shootings, very high complaints, many violent felonies)
 - "risk_level": "LOW RISK" or "MODERATE RISK" or "HIGH RISK"
 - "assessment": brief 2-3 sentence assessment
 - "recommendations": array of 3-4 safety tips
 - "best_times": when to visit
 - "avoid_times": when to avoid
 
+IMPORTANT: Be balanced and realistic. Don't overstate risk. Consider both datasets together. A location with few shootings but many minor complaints is still relatively safe. Focus on violent crime for serious risk assessment.
+
 RESPOND ONLY WITH VALID JSON, no markdown."""
 
     try:
         # Use local Ollama server
-        system_prompt = "You are an expert NYC safety analyst. Provide accurate, data-driven safety assessments based on shooting incident data. Always respond in valid JSON format only."
+        system_prompt = "You are an expert NYC safety analyst. Provide accurate, balanced, data-driven safety assessments. Avoid exaggeration. Focus on violent crime for serious risk assessment while considering overall crime context."
         
         messages = [{"role": "user", "content": prompt}]
         
@@ -438,20 +565,24 @@ RESPOND ONLY WITH VALID JSON, no markdown."""
 
     except Exception as e:
         logger.error(f"AI analysis error: {e}")
-        if total_nearby == 0:
-            rating, risk = 9, "LOW"
-        elif total_nearby < 5:
-            rating, risk = 7, "LOW"
-        elif total_nearby < 20:
-            rating, risk = 5, "MODERATE"
-        elif total_nearby < 50:
-            rating, risk = 3, "HIGH"
+        # Balanced fallback based on shooting data primarily
+        if total_shootings == 0:
+            rating, risk = 2, "LOW RISK"
+        elif total_shootings <= 2:
+            rating, risk = 3, "LOW RISK"
+        elif total_shootings <= 5:
+            rating, risk = 4, "LOW RISK"
+        elif total_shootings <= 10:
+            rating, risk = 6, "MODERATE RISK"
+        elif total_shootings <= 20:
+            rating, risk = 7, "MODERATE RISK"
         else:
-            rating, risk = 1, "CRITICAL"
+            rating, risk = 9, "HIGH RISK"
+        
         analysis = {
             "rating": rating,
             "risk_level": risk,
-            "assessment": f"Based on {total_nearby} shooting incidents nearby, this area has a {risk.lower()} risk level.",
+            "assessment": f"Based on {total_shootings} shooting incidents and {total_complaints} complaints within 400m, this area has a {risk.lower()}.",
             "recommendations": ["Stay aware of your surroundings", "Avoid poorly lit areas at night", "Travel with companions when possible"],
             "best_times": "Daytime hours (8am-5pm)",
             "avoid_times": "Late night (11pm-5am)"
