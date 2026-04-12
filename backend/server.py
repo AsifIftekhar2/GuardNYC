@@ -402,8 +402,8 @@ Shooting data within ~1km radius:
 Recent incidents nearby: {json.dumps([{"desc": s.get("location_desc",""), "time": s.get("occur_time",""), "date": s.get("occur_date","")[:10] if s.get("occur_date") else ""} for s in nearby[:8]])}
 
 Provide a JSON response with these exact keys:
-- "rating": number 1-10 (10=safest)
-- "risk_level": "LOW" or "MODERATE" or "HIGH" or "CRITICAL"
+- "rating": number 1-10 where 1=SAFEST/LOWEST RISK and 10=MOST DANGEROUS/HIGHEST RISK
+- "risk_level": "LOW RISK" or "MODERATE RISK" or "HIGH RISK"
 - "assessment": brief 2-3 sentence assessment
 - "recommendations": array of 3-4 safety tips
 - "best_times": when to visit
@@ -428,9 +428,9 @@ RESPOND ONLY WITH VALID JSON, no markdown."""
             if json_match:
                 analysis = json.loads(json_match.group())
             else:
-                analysis = {"rating": 5, "risk_level": "MODERATE", "assessment": response_text, "recommendations": [], "best_times": "Daytime", "avoid_times": "Late night"}
+                analysis = {"rating": 5, "risk_level": "MODERATE RISK", "assessment": response_text, "recommendations": [], "best_times": "Daytime", "avoid_times": "Late night"}
         except json.JSONDecodeError:
-            analysis = {"rating": 5, "risk_level": "MODERATE", "assessment": response_text, "recommendations": [], "best_times": "Daytime", "avoid_times": "Late night"}
+            analysis = {"rating": 5, "risk_level": "MODERATE RISK", "assessment": response_text, "recommendations": [], "best_times": "Daytime", "avoid_times": "Late night"}
 
     except Exception as e:
         logger.error(f"AI analysis error: {e}")

@@ -256,31 +256,31 @@ export default function CalendarScreen() {
   };
 
   const getRiskColor = (level?: string) => {
-    switch (level?.toUpperCase()) {
+    const normalized = level?.toUpperCase().replace(' RISK', '');
+    switch (normalized) {
       case 'LOW': return '#34D399';
       case 'MODERATE': return '#FBBF24';
-      case 'HIGH': return '#FB7185';
-      case 'CRITICAL': return '#EF4444';
+      case 'HIGH': return '#EF4444';
       default: return '#71717A';
     }
   };
 
   const getRiskBg = (level?: string) => {
-    switch (level?.toUpperCase()) {
+    const normalized = level?.toUpperCase().replace(' RISK', '');
+    switch (normalized) {
       case 'LOW': return 'rgba(52,211,153,0.1)';
       case 'MODERATE': return 'rgba(251,191,36,0.1)';
-      case 'HIGH': return 'rgba(251,113,133,0.1)';
-      case 'CRITICAL': return 'rgba(239,68,68,0.1)';
+      case 'HIGH': return 'rgba(239,68,68,0.1)';
       default: return 'rgba(113,113,122,0.1)';
     }
   };
 
   const getRiskIcon = (level?: string): any => {
-    switch (level?.toUpperCase()) {
+    const normalized = level?.toUpperCase().replace(' RISK', '');
+    switch (normalized) {
       case 'LOW': return 'shield-checkmark';
       case 'MODERATE': return 'warning';
       case 'HIGH': return 'alert-circle';
-      case 'CRITICAL': return 'skull';
       default: return 'help-circle';
     }
   };
