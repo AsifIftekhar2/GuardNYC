@@ -41,7 +41,7 @@ JWT_ALGORITHM = "HS256"
 # Google OAuth Config
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
-GOOGLE_REDIRECT_URI = os.environ.get('GOOGLE_REDIRECT_URI', 'https://app-launch-241.preview.emergentagent.com/api/google/callback')
+GOOGLE_REDIRECT_URI = os.environ.get('GOOGLE_REDIRECT_URI', 'https://load-app-10.preview.emergentagent.com/api/google/callback')
 GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 
 # App
