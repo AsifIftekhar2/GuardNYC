@@ -14,6 +14,17 @@ interface Message {
   created_at?: string;
 }
 
+// Helper function to clean markdown formatting
+const cleanMarkdown = (text: string): string => {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')  // Remove bold **text**
+    .replace(/\*(.+?)\*/g, '$1')      // Remove italic *text*
+    .replace(/^[-*•]\s+/gm, '• ')     // Normalize list bullets
+    .replace(/^#{1,6}\s+(.+)$/gm, '$1') // Remove headers
+    .replace(/`(.+?)`/g, '$1')        // Remove code backticks
+    .trim();
+};
+
 export default function ChatScreen() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -28,7 +39,11 @@ export default function ChatScreen() {
   const loadHistory = async () => {
     try {
       const response = await apiGet('/api/chat/history');
-      setMessages(response.messages || []);
+      const cleanedMessages = (response.messages || []).map((msg: Message) => ({
+        ...msg,
+        content: msg.role === 'assistant' ? cleanMarkdown(msg.content) : msg.content
+      }));
+      setMessages(cleanedMessages);
     } catch {
     } finally {
       setLoadingHistory(false);
@@ -82,10 +97,13 @@ export default function ChatScreen() {
                 const data = JSON.parse(line.slice(6));
                 if (data.chunk) {
                   fullContent += data.chunk;
-                  // Update the assistant message with accumulated content
+                  // Update the assistant message with cleaned content
                   setMessages(prev => {
                     const updated = [...prev];
-                    updated[assistantMsgIndex] = { role: 'assistant', content: fullContent };
+                    updated[assistantMsgIndex] = { 
+                      role: 'assistant', 
+                      content: cleanMarkdown(fullContent)
+                    };
                     return updated;
                   });
                 }

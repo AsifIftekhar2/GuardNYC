@@ -9,6 +9,17 @@ import { useAuth } from '../../context/AuthContext';
 import { apiGet, apiPost } from '../../utils/api';
 import { useFocusEffect } from '@react-navigation/native';
 
+// Helper function to clean markdown formatting
+const cleanMarkdown = (text: string): string => {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')  // Remove bold **text**
+    .replace(/\*(.+?)\*/g, '$1')      // Remove italic *text*
+    .replace(/^[-*•]\s+/gm, '• ')     // Normalize list bullets
+    .replace(/^#{1,6}\s+(.+)$/gm, '$1') // Remove headers
+    .replace(/`(.+?)`/g, '$1')        // Remove code backticks
+    .trim();
+};
+
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
   const [dailyBrief, setDailyBrief] = useState<any>(null);
@@ -30,6 +41,10 @@ export default function ProfileScreen() {
         apiGet('/api/daily-brief'),
         apiGet('/api/brief-settings')
       ]);
+      // Clean markdown from brief text
+      if (brief && brief.brief) {
+        brief.brief = cleanMarkdown(brief.brief);
+      }
       setDailyBrief(brief);
       setBriefSettings(settings);
       setSelectedHour(settings.preferred_hour);
@@ -45,6 +60,10 @@ export default function ProfileScreen() {
     try {
       const url = force ? '/api/daily-brief?force=true' : '/api/daily-brief';
       const brief = await apiGet(url);
+      // Clean markdown from brief text
+      if (brief && brief.brief) {
+        brief.brief = cleanMarkdown(brief.brief);
+      }
       setDailyBrief(brief);
     } catch (error) {
       console.error('Failed to load daily brief:', error);

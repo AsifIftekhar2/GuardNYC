@@ -645,7 +645,9 @@ You help users:
 
 Be helpful, factual, and reassuring. Focus on actionable advice. Don't cause unnecessary panic.
 When locations are mentioned, reference shooting data patterns.
-Keep responses concise but thorough - 2-4 paragraphs max."""
+Keep responses concise but thorough - 2-4 paragraphs max.
+
+IMPORTANT: Respond in plain text only. Do NOT use markdown formatting (**, *, -, #, etc.). Use natural language with proper punctuation and paragraphs."""
 
     try:
         # Stream response from Ollama
@@ -874,9 +876,9 @@ Provide a personalized daily safety brief that includes:
 4. Best practices for staying safe today
 
 Keep it concise (3-4 paragraphs max), actionable, and reassuring. Don't cause panic.
-Format as plain text, not JSON."""
+Format as plain text only - NO markdown formatting (no **, *, -, #, etc.). Use natural paragraphs."""
 
-    system_msg = "You are a helpful NYC safety advisor. Provide practical, reassuring safety advice based on NYPD shooting data analysis."
+    system_msg = "You are a helpful NYC safety advisor. Provide practical, reassuring safety advice in plain text format without any markdown."
     
     try:
         messages = [{"role": "user", "content": prompt}]
