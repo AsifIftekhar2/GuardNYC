@@ -26,9 +26,9 @@ export default function TabLayout() {
       <Tabs.Screen
         name="chat"
         options={{
-          title: 'Agent',
+          title: 'Sentry',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="chatbubble-ellipses" size={22} color={color} />
+            <Ionicons name="shield-checkmark" size={22} color={color} />
           ),
         }}
       />

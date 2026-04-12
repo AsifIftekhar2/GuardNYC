@@ -90,7 +90,7 @@ export default function ChatScreen() {
             <Ionicons name="shield-checkmark" size={22} color="#0EA5E9" />
           </View>
           <View>
-            <Text style={styles.headerTitle}>Safety Agent</Text>
+            <Text style={styles.headerTitle}>Safety Sentry</Text>
             <Text style={styles.headerSub}>Powered by AI</Text>
           </View>
         </View>
