@@ -150,7 +150,7 @@ ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=admin123
 
 # Local Ollama (via Tailscale)
-OLLAMA_BASE_URL=http://100.96.157.82:11434
+OLLAMA_BASE_URL=*YOUR LCOAL URL*
 OLLAMA_MODEL=nemotron-3-nano
 
 # Google OAuth (for Calendar - optional)
