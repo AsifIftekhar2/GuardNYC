@@ -5,13 +5,16 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi.responses import RedirectResponse, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional
+from typing import List, Optional, AsyncGenerator
 from bson import ObjectId
 from datetime import datetime, timezone, timedelta
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request as GoogleRequest
+from googleapiclient.discovery import build
 import os
 import logging
 import uuid
@@ -20,10 +23,16 @@ import jwt
 import httpx
 import json
 import re
+import asyncio
 
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Ollama Configuration
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://100.96.157.82:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "nemotron-3-nano")
+logger.info(f"Ollama configured: {OLLAMA_BASE_URL} with model {OLLAMA_MODEL}")
 
 # MongoDB
 mongo_url = os.environ['MONGO_URL']
@@ -33,6 +42,15 @@ db = client[os.environ['DB_NAME']]
 # JWT Config
 JWT_SECRET = os.environ.get('JWT_SECRET', 'dev-secret-change-me')
 JWT_ALGORITHM = "HS256"
+
+# Google OAuth Config
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
+GOOGLE_REDIRECT_URI = os.environ.get('GOOGLE_REDIRECT_URI', 'https://load-app-10.preview.emergentagent.com/api/google/callback')
+GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+
+# Frontend URL for redirects
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:8081')
 
 # App
 app = FastAPI(title="Agentic Safeguard API")
@@ -84,6 +102,77 @@ async def get_current_user(request: Request) -> dict:
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+
+# ==================== OLLAMA INTEGRATION ====================
+
+async def query_ollama(messages: list, system_prompt: str = "", stream: bool = True) -> AsyncGenerator[str, None]:
+    """
+    Query local Ollama server with streaming support
+    
+    Args:
+        messages: List of message dicts with 'role' and 'content'
+        system_prompt: Optional system instruction
+        stream: Enable streaming responses (default: True)
+    
+    Yields:
+        Streaming text chunks from Ollama
+    """
+    # Prepare messages with system prompt if provided
+    ollama_messages = []
+    if system_prompt:
+        ollama_messages.append({"role": "system", "content": system_prompt})
+    ollama_messages.extend(messages)
+    
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": ollama_messages,
+        "stream": stream
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream(
+                "POST",
+                f"{OLLAMA_BASE_URL}/api/chat",
+                json=payload
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    logger.error(f"Ollama error: {error_text}")
+                    yield json.dumps({
+                        "error": f"Ollama server error: {response.status_code}",
+                        "message": "Failed to connect to local AI server"
+                    })
+                    return
+                
+                if stream:
+                    async for line in response.aiter_lines():
+                        if line.strip():
+                            try:
+                                chunk = json.loads(line)
+                                if "message" in chunk and "content" in chunk["message"]:
+                                    yield chunk["message"]["content"]
+                                if chunk.get("done", False):
+                                    break
+                            except json.JSONDecodeError:
+                                continue
+                else:
+                    data = await response.aread()
+                    result = json.loads(data)
+                    if "message" in result and "content" in result["message"]:
+                        yield result["message"]["content"]
+    
+    except httpx.ConnectError:
+        logger.error(f"Cannot connect to Ollama at {OLLAMA_BASE_URL}")
+        # Return empty string to trigger fallback logic
+        return
+    except httpx.TimeoutException:
+        logger.error(f"Ollama timeout at {OLLAMA_BASE_URL}")
+        return
+    except Exception as e:
+        logger.error(f"Ollama query error: {e}")
+        return
+
 # ==================== MODELS ====================
 
 class RegisterRequest(BaseModel):
@@ -112,6 +201,10 @@ class PlanEventRequest(BaseModel):
     start_time: str
     end_time: Optional[str] = None
     notes: Optional[str] = None
+
+class BriefSettingsRequest(BaseModel):
+    preferred_hour: int = Field(ge=0, le=23, description="Hour of day (0-23) to generate daily brief")
+
 
 # ==================== AUTH ENDPOINTS ====================
 
@@ -223,6 +316,82 @@ async def sync_shooting_data():
             logger.info(f"Synced {len(records)} shooting records")
         return len(records)
 
+
+# Complaint Data URLs
+NYC_COMPLAINTS_HISTORIC_URL = "https://data.cityofnewyork.us/resource/qgea-i56i.json"
+NYC_COMPLAINTS_CURRENT_URL = "https://data.cityofnewyork.us/resource/5uac-w243.json"
+
+async def sync_complaint_data():
+    """Fetch complaint data from NYC OpenData SODA API and cache in MongoDB"""
+    logger.info("Syncing complaint data from NYC OpenData...")
+    
+    # Get recent years (last 3 years for efficiency)
+    current_year = datetime.now(timezone.utc).year
+    years_to_fetch = [current_year, current_year - 1, current_year - 2]
+    
+    async with httpx.AsyncClient() as http_client:
+        all_records = []
+        
+        for year in years_to_fetch:
+            try:
+                # Fetch from current year dataset if year is current, otherwise historic
+                url = NYC_COMPLAINTS_CURRENT_URL if year == current_year else NYC_COMPLAINTS_HISTORIC_URL
+                
+                params = {
+                    "$select": "cmplnt_num,cmplnt_fr_dt,cmplnt_fr_tm,latitude,longitude,boro_nm,ofns_desc,law_cat_cd",
+                    "$where": f"cmplnt_fr_dt >= '{year}-01-01T00:00:00' AND cmplnt_fr_dt < '{year+1}-01-01T00:00:00' AND latitude IS NOT NULL AND longitude IS NOT NULL",
+                    "$limit": 10000,
+                    "$order": "cmplnt_fr_dt DESC"
+                }
+                
+                response = await http_client.get(url, params=params, timeout=120)
+                if response.status_code != 200:
+                    logger.warning(f"Failed to fetch complaint data for {year}: {response.status_code}")
+                    continue
+                
+                data = response.json()
+                year_records = []
+                
+                for item in data:
+                    try:
+                        lat = float(item.get("latitude", 0))
+                        lon = float(item.get("longitude", 0))
+                        if lat == 0 or lon == 0:
+                            continue
+                        
+                        record = {
+                            "complaint_num": item.get("cmplnt_num", ""),
+                            "complaint_date": item.get("cmplnt_fr_dt", "")[:10] if item.get("cmplnt_fr_dt") else "",
+                            "complaint_time": item.get("cmplnt_fr_tm", ""),
+                            "latitude": lat,
+                            "longitude": lon,
+                            "boro": item.get("boro_nm", "UNKNOWN").upper(),
+                            "offense": item.get("ofns_desc", "UNKNOWN"),
+                            "severity": item.get("law_cat_cd", "UNKNOWN"),  # FELONY, MISDEMEANOR, VIOLATION
+                            "year": year
+                        }
+                        year_records.append(record)
+                    except (ValueError, TypeError) as e:
+                        continue
+                
+                logger.info(f"Fetched {len(year_records)} complaints for {year}")
+                all_records.extend(year_records)
+                
+            except Exception as e:
+                logger.error(f"Error fetching complaints for {year}: {e}")
+                continue
+        
+        # Bulk upsert to database
+        if all_records:
+            await db.complaint_data.delete_many({})  # Clear old data
+            await db.complaint_data.insert_many(all_records)
+            await db.complaint_data.create_index([("latitude", 1), ("longitude", 1)])
+            await db.complaint_data.create_index([("boro", 1)])
+            await db.complaint_data.create_index([("severity", 1)])
+            logger.info(f"Synced {len(all_records)} complaint records")
+        
+        return len(all_records)
+
 @api_router.get("/shootings")
 async def get_shootings(boro: Optional[str] = None, year: Optional[int] = None, limit: int = 3000):
     count = await db.shooting_data.count_documents({})
@@ -246,8 +415,15 @@ async def get_shootings(boro: Optional[str] = None, year: Optional[int] = None, 
 
 @api_router.post("/shootings/sync")
 async def trigger_sync():
+    """Manually trigger shooting data sync"""
     count = await sync_shooting_data()
     return {"message": f"Synced {count} shooting records", "count": count}
+
+@api_router.post("/complaints/sync")
+async def trigger_complaint_sync():
+    """Manually trigger complaint data sync"""
+    count = await sync_complaint_data()
+    return {"message": f"Synced {count} complaint records", "count": count}
 
 @api_router.get("/shootings/heatmap")
 async def get_heatmap_data(limit: int = 5000):
@@ -268,18 +444,42 @@ async def get_heatmap_data(limit: int = 5000):
 # ==================== SAFETY ANALYSIS ====================
 
 async def run_safety_analysis(latitude: float, longitude: float, location_name: str, time_of_day: str = "") -> dict:
-    """Core safety analysis function - reusable"""
-    radius = 0.01  # ~1km
-    nearby = await db.shooting_data.find({
+    """
+    Enhanced safety analysis using both shooting and complaint data
+    Radius: 400m (~0.0036 degrees latitude/longitude)
+    """
+    # 400m radius in degrees (approximately)
+    radius = 0.0036  # ~400 meters
+    
+    # Get shooting data within radius
+    shootings = await db.shooting_data.find({
         "latitude": {"$gte": latitude - radius, "$lte": latitude + radius},
         "longitude": {"$gte": longitude - radius, "$lte": longitude + radius}
     }, {"_id": 0}).to_list(500)
-
-    total_nearby = len(nearby)
-    murders_nearby = sum(1 for s in nearby if s.get("is_murder"))
-
+    
+    # Get complaint data within radius (handle missing collection gracefully)
+    try:
+        complaints = await db.complaint_data.find({
+            "latitude": {"$gte": latitude - radius, "$lte": latitude + radius},
+            "longitude": {"$gte": longitude - radius, "$lte": longitude + radius}
+        }, {"_id": 0}).to_list(1000)
+    except Exception as e:
+        logger.warning(f"Complaint data not available: {e}")
+        complaints = []
+    
+    # Shooting statistics
+    total_shootings = len(shootings)
+    murders = sum(1 for s in shootings if s.get("is_murder"))
+    
+    # Complaint statistics by severity
+    felonies = sum(1 for c in complaints if c.get("severity") == "FELONY")
+    misdemeanors = sum(1 for c in complaints if c.get("severity") == "MISDEMEANOR")
+    violations = sum(1 for c in complaints if c.get("severity") == "VIOLATION")
+    total_complaints = len(complaints)
+    
+    # Time distribution for shootings
     time_counts = {"morning": 0, "afternoon": 0, "evening": 0, "night": 0}
-    for s in nearby:
+    for s in shootings:
         t = s.get("occur_time", "")
         if t:
             try:
@@ -294,69 +494,110 @@ async def run_safety_analysis(latitude: float, longitude: float, location_name: 
                     time_counts["night"] += 1
             except (ValueError, IndexError):
                 pass
-
+    
+    # Borough stats
     boro_stats = {}
-    for s in nearby:
+    for s in shootings:
         b = s.get("boro", "UNKNOWN")
         boro_stats[b] = boro_stats.get(b, 0) + 1
+    
+    # Calculate crime density (incidents per 100k sq meters, 400m radius = ~502,000 sq meters)
+    area_factor = 5.02  # to normalize per 100k sq meters
+    shooting_density = (total_shootings / area_factor) if total_shootings > 0 else 0
+    crime_density = (total_complaints / area_factor) if total_complaints > 0 else 0
 
-    prompt = f"""Analyze the safety of this NYC location based on shooting incident data:
+    # Build appropriate prompt based on data availability
+    if total_complaints > 0:
+        complaint_section = f"""
+COMPLAINT DATA (within 400m):
+- Total complaints: {total_complaints}
+- Felonies: {felonies}
+- Misdemeanors: {misdemeanors}
+- Violations: {violations}
+- Crime density: {crime_density:.1f} per 100k sq meters"""
+        context_note = "Shootings are historical data (2006-present). Complaints include all reported crimes (last 3 years). 400m radius focuses on immediate neighborhood."
+    else:
+        complaint_section = """
+COMPLAINT DATA: Not yet synced (analysis based on shooting data only)"""
+        context_note = "Analysis based on shooting data only (2006-present). 400m radius focuses on immediate neighborhood. Complaint data will provide more context when synced."
+
+    prompt = f"""Analyze the safety of this NYC location based on crime data:
 
 Location: {location_name} (Lat: {latitude:.4f}, Lon: {longitude:.4f})
-Time of visit: {time_of_day if time_of_day else 'Not specified'}
+Search Radius: 400 meters (focused local area)
 
-Shooting data within ~1km radius:
-- Total incidents: {total_nearby}
-- Fatal incidents: {murders_nearby}
-- Borough breakdown: {json.dumps(boro_stats)}
+SHOOTING DATA (within 400m):
+- Total shooting incidents: {total_shootings}
+- Fatal shootings: {murders}
+- Shooting density: {shooting_density:.1f} per 100k sq meters
 - Time distribution: Morning({time_counts['morning']}), Afternoon({time_counts['afternoon']}), Evening({time_counts['evening']}), Night({time_counts['night']})
+{complaint_section}
 
-Recent incidents nearby: {json.dumps([{"desc": s.get("location_desc",""), "time": s.get("occur_time",""), "date": s.get("occur_date","")[:10] if s.get("occur_date") else ""} for s in nearby[:8]])}
+CONTEXT: {context_note}
 
 Provide a JSON response with these exact keys:
-- "rating": number 1-10 (10=safest)
-- "risk_level": "LOW" or "MODERATE" or "HIGH" or "CRITICAL"
+- "rating": number 1-10 where 1=SAFEST/LOWEST RISK and 10=MOST DANGEROUS/HIGHEST RISK
+  * Use this balanced scale:
+  * 1-2: Very safe (0-2 shootings, minimal complaints)
+  * 3-4: Safe (2-5 shootings, moderate complaints)
+  * 5-6: Moderate risk (5-10 shootings, higher complaints)
+  * 7-8: Elevated risk (10-20 shootings, many complaints)
+  * 9-10: High risk (20+ shootings, very high complaints)
+- "risk_level": "LOW RISK" or "MODERATE RISK" or "HIGH RISK"
 - "assessment": brief 2-3 sentence assessment
 - "recommendations": array of 3-4 safety tips
 - "best_times": when to visit
 - "avoid_times": when to avoid
 
+IMPORTANT: Be balanced and realistic. Don't overstate risk. Focus on violent crime (shootings) for serious risk assessment.
+
 RESPOND ONLY WITH VALID JSON, no markdown."""
 
     try:
-        chat = LlmChat(
-            api_key=os.environ.get("EMERGENT_LLM_KEY", ""),
-            session_id=f"safety-{uuid.uuid4()}",
-            system_message="You are an expert NYC safety analyst. Provide accurate, data-driven safety assessments based on shooting incident data. Always respond in valid JSON format only."
-        ).with_model("gemini", "gemini-3-flash-preview")
+        # Use local Ollama server
+        system_prompt = "You are an expert NYC safety analyst. Provide accurate, balanced, data-driven safety assessments. Avoid exaggeration. Focus on violent crime for serious risk assessment while considering overall crime context."
+        
+        messages = [{"role": "user", "content": prompt}]
+        
+        # Collect full response (non-streaming for JSON parsing)
+        response_text = ""
+        async for chunk in query_ollama(messages, system_prompt, stream=False):
+            response_text += chunk
 
-        response = await chat.send_message(UserMessage(text=prompt))
+        # If Ollama isn't available or returned empty, use fallback
+        if not response_text or len(response_text) < 10:
+            raise Exception("Ollama unavailable, using fallback")
 
+        # Parse JSON from response
         try:
-            json_match = re.search(r'\{[\s\S]*\}', response)
+            json_match = re.search(r'\{[\s\S]*\}', response_text)
             if json_match:
                 analysis = json.loads(json_match.group())
             else:
-                analysis = {"rating": 5, "risk_level": "MODERATE", "assessment": response, "recommendations": [], "best_times": "Daytime", "avoid_times": "Late night"}
+                analysis = {"rating": 5, "risk_level": "MODERATE RISK", "assessment": response_text, "recommendations": [], "best_times": "Daytime", "avoid_times": "Late night"}
         except json.JSONDecodeError:
-            analysis = {"rating": 5, "risk_level": "MODERATE", "assessment": response, "recommendations": [], "best_times": "Daytime", "avoid_times": "Late night"}
+            analysis = {"rating": 5, "risk_level": "MODERATE RISK", "assessment": response_text, "recommendations": [], "best_times": "Daytime", "avoid_times": "Late night"}
 
     except Exception as e:
         logger.error(f"AI analysis error: {e}")
-        if total_nearby == 0:
-            rating, risk = 9, "LOW"
-        elif total_nearby < 5:
-            rating, risk = 7, "LOW"
-        elif total_nearby < 20:
-            rating, risk = 5, "MODERATE"
-        elif total_nearby < 50:
-            rating, risk = 3, "HIGH"
+        # Balanced fallback based on shooting data primarily
+        if total_shootings == 0:
+            rating, risk = 2, "LOW RISK"
+        elif total_shootings <= 2:
+            rating, risk = 3, "LOW RISK"
+        elif total_shootings <= 5:
+            rating, risk = 4, "LOW RISK"
+        elif total_shootings <= 10:
+            rating, risk = 6, "MODERATE RISK"
+        elif total_shootings <= 20:
+            rating, risk = 7, "MODERATE RISK"
         else:
-            rating, risk = 1, "CRITICAL"
+            rating, risk = 9, "HIGH RISK"
+        
         analysis = {
             "rating": rating,
             "risk_level": risk,
-            "assessment": f"Based on {total_nearby} shooting incidents nearby, this area has a {risk.lower()} risk level.",
+            "assessment": f"Based on {total_shootings} shooting incidents and {total_complaints} complaints within 400m, this area has a {risk.lower()}.",
             "recommendations": ["Stay aware of your surroundings", "Avoid poorly lit areas at night", "Travel with companions when possible"],
             "best_times": "Daytime hours (8am-5pm)",
             "avoid_times": "Late night (11pm-5am)"
@@ -365,7 +606,7 @@ RESPOND ONLY WITH VALID JSON, no markdown."""
     analysis["latitude"] = latitude
     analysis["longitude"] = longitude
     analysis["location_name"] = location_name
-    analysis["incident_count"] = total_nearby
+    analysis["incident_count"] = total_shootings
     analysis["analyzed_at"] = datetime.now(timezone.utc).isoformat()
     return analysis
 
@@ -385,10 +626,13 @@ async def chat_with_agent(req: ChatMessageRequest, user=Depends(get_current_user
     ).sort("created_at", -1).limit(10).to_list(10)
     history.reverse()
 
-    context_messages = ""
+    # Build conversation history for Ollama
+    messages = []
     for msg in history:
-        role = "User" if msg["role"] == "user" else "Agent"
-        context_messages += f"{role}: {msg['content']}\n"
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    
+    # Add current user message
+    messages.append({"role": "user", "content": req.message})
 
     system_msg = """You are the Agentic Safeguard AI, an expert NYC safety advisor powered by real NYPD shooting incident data (2006-present).
 
@@ -401,31 +645,30 @@ You help users:
 
 Be helpful, factual, and reassuring. Focus on actionable advice. Don't cause unnecessary panic.
 When locations are mentioned, reference shooting data patterns.
-Keep responses concise but thorough - 2-4 paragraphs max."""
+Keep responses concise but thorough - 2-4 paragraphs max.
 
-    prompt = f"""Previous conversation:
-{context_messages}
-
-User's message: {req.message}
-
-Respond helpfully about NYC safety."""
+IMPORTANT: Respond in plain text only. Do NOT use markdown formatting (**, *, -, #, etc.). Use natural language with proper punctuation and paragraphs."""
 
     try:
-        chat = LlmChat(
-            api_key=os.environ.get("EMERGENT_LLM_KEY", ""),
-            session_id=f"chat-{user_id}-{uuid.uuid4()}",
-            system_message=system_msg
-        ).with_model("gemini", "gemini-3-flash-preview")
-
-        response = await chat.send_message(UserMessage(text=prompt))
-
-        now = datetime.now(timezone.utc)
-        await db.chat_messages.insert_many([
-            {"user_id": user_id, "role": "user", "content": req.message, "created_at": now.isoformat()},
-            {"user_id": user_id, "role": "assistant", "content": response, "created_at": (now + timedelta(milliseconds=1)).isoformat()}
-        ])
-
-        return {"response": response}
+        # Stream response from Ollama
+        async def stream_response():
+            full_response = ""
+            async for chunk in query_ollama(messages, system_msg, stream=True):
+                full_response += chunk
+                # Send chunk to client
+                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            
+            # Save conversation to database after streaming completes
+            now = datetime.now(timezone.utc)
+            await db.chat_messages.insert_many([
+                {"user_id": user_id, "role": "user", "content": req.message, "created_at": now.isoformat()},
+                {"user_id": user_id, "role": "assistant", "content": full_response, "created_at": (now + timedelta(milliseconds=1)).isoformat()}
+            ])
+            
+            yield f"data: {json.dumps({'done': True})}\n\n"
+        
+        return StreamingResponse(stream_response(), media_type="text/event-stream")
+    
     except Exception as e:
         logger.error(f"Chat error: {e}")
         raise HTTPException(status_code=500, detail="AI agent temporarily unavailable. Please try again.")
@@ -518,31 +761,246 @@ async def analyze_plan(plan_id: str, user=Depends(get_current_user)):
     await db.plans.update_one({"id": plan_id}, {"$set": {"safety_analysis": analysis}})
 
     plan["safety_analysis"] = analysis
+
+@api_router.get("/daily-brief")
+async def get_daily_brief(user=Depends(get_current_user), force: bool = False):
+    """
+    Get or generate AI-powered daily safety brief for today's plans.
+    Uses lazy evaluation - generates once per day at user's preferred time.
+    
+    Args:
+        force: If True, regenerate brief even if already generated today
+    """
+    user_id = user["_id"]
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    
+    # Get user settings
+    preferred_hour = user.get("brief_preferred_hour", 6)  # Default 6 AM
+    last_generated = user.get("last_brief_generated")
+    cached_brief = user.get("cached_daily_brief")
+    
+    # Check if we need to regenerate
+    should_regenerate = force
+    
+    if not force:
+        if not last_generated:
+            # Never generated before
+            should_regenerate = True
+        else:
+            last_gen_dt = datetime.fromisoformat(last_generated) if isinstance(last_generated, str) else last_generated
+            last_gen_date = last_gen_dt.date()
+            
+            # Check if it's a new day AND we've passed the preferred hour
+            if last_gen_date < today and now.hour >= preferred_hour:
+                should_regenerate = True
+            elif last_gen_date < today - timedelta(days=1):
+                # If more than a day old, regenerate regardless of hour
+                should_regenerate = True
+    
+    # If we have a cached brief and don't need to regenerate, return it
+    if not should_regenerate and cached_brief:
+        return cached_brief
+    
+    # Generate new brief
+    today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
+    today_end = datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc)
+    
+    # Get today's plans
+    plans = await db.plans.find({
+        "user_id": user_id,
+        "start_time": {
+            "$gte": today_start.isoformat(),
+            "$lte": today_end.isoformat()
+        }
+    }).sort("start_time", 1).to_list(50)
+    
+    if not plans:
+        result = {
+            "brief": "No plans scheduled for today. Stay safe and enjoy your day!",
+            "plans_count": 0,
+            "has_risks": False,
+            "generated_at": now.isoformat(),
+            "next_generation": f"{preferred_hour:02d}:00 tomorrow"
+        }
+        # Cache the result
+        await db.users.update_one(
+            {"_id": user_id},
+            {"$set": {
+                "cached_daily_brief": result,
+                "last_brief_generated": now.isoformat()
+            }}
+        )
+        return result
+    
+    # Format plans for AI analysis
+    plans_summary = []
+    total_risk_score = 0
+    high_risk_count = 0
+    
+    for plan in plans:
+        time_str = plan.get("start_time", "")[:16] if plan.get("start_time") else "Unknown time"
+        safety = plan.get("safety_analysis", {})
+        rating = safety.get("rating", 5)
+        risk_level = safety.get("risk_level", "MODERATE RISK")
+        
+        total_risk_score += rating
+        if rating >= 7:  # High risk (7-10)
+            high_risk_count += 1
+        
+        plans_summary.append({
+            "title": plan.get("title", "Untitled"),
+            "location": plan.get("location_name", "Unknown"),
+            "time": time_str,
+            "rating": rating,
+            "risk_level": risk_level,
+            "assessment": safety.get("assessment", "")
+        })
+    
+    avg_risk = total_risk_score / len(plans) if plans else 5
+    
+    # Generate AI brief
+    prompt = f"""You are a personal safety advisor. Analyze today's schedule and provide a brief safety summary.
+
+Today's Plans ({len(plans)} events):
+{json.dumps(plans_summary, indent=2)}
+
+Overall Risk Profile:
+- Average risk rating: {avg_risk:.1f}/10 (1=safest, 10=most dangerous)
+- High-risk events (7-10): {high_risk_count}
+
+Provide a personalized daily safety brief that includes:
+1. Overall safety assessment for the day (1-2 sentences)
+2. Specific concerns or warnings for high-risk events
+3. Recommended actions or alternatives (if any high-risk events exist)
+4. Best practices for staying safe today
+
+Keep it concise (3-4 paragraphs max), actionable, and reassuring. Don't cause panic.
+Format as plain text only - NO markdown formatting (no **, *, -, #, etc.). Use natural paragraphs."""
+
+    system_msg = "You are a helpful NYC safety advisor. Provide practical, reassuring safety advice in plain text format without any markdown."
+    
+    try:
+        messages = [{"role": "user", "content": prompt}]
+        
+        # Get AI brief (non-streaming for this endpoint)
+        brief_text = ""
+        async for chunk in query_ollama(messages, system_msg, stream=False):
+            brief_text += chunk
+        
+        has_risks = high_risk_count > 0 or avg_risk >= 6
+        
+        # Calculate next generation time
+        tomorrow = today + timedelta(days=1)
+        next_gen_time = f"{preferred_hour:02d}:00 tomorrow"
+        
+        result = {
+            "brief": brief_text,
+            "plans_count": len(plans),
+            "has_risks": has_risks,
+            "avg_risk": round(avg_risk, 1),
+            "high_risk_count": high_risk_count,
+            "generated_at": now.isoformat(),
+            "next_generation": next_gen_time
+        }
+        
+        # Cache the result
+        await db.users.update_one(
+            {"_id": user_id},
+            {"$set": {
+                "cached_daily_brief": result,
+                "last_brief_generated": now.isoformat()
+            }}
+        )
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Daily brief error: {e}")
+        return {
+            "brief": f"You have {len(plans)} plan(s) today. Check individual event details for safety information.",
+            "plans_count": len(plans),
+            "has_risks": False,
+            "generated_at": now.isoformat()
+        }
+
     plan.pop("_id", None)
     return plan
 
+@api_router.post("/brief-settings")
+async def update_brief_settings(req: BriefSettingsRequest, user=Depends(get_current_user)):
+    """Update user's daily brief generation preferences"""
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {"brief_preferred_hour": req.preferred_hour}}
+    )
+    return {
+        "message": "Brief settings updated",
+        "preferred_hour": req.preferred_hour,
+        "next_generation": f"Daily brief will generate at {req.preferred_hour:02d}:00"
+    }
+
+@api_router.get("/brief-settings")
+async def get_brief_settings(user=Depends(get_current_user)):
+    """Get user's daily brief generation preferences"""
+    preferred_hour = user.get("brief_preferred_hour", 6)
+    last_generated = user.get("last_brief_generated")
+    
+    return {
+        "preferred_hour": preferred_hour,
+        "last_generated": last_generated,
+        "generation_time": f"{preferred_hour:02d}:00 daily"
+    }
+
+
 async def geocode_location(location_name: str):
     """Geocode a location name to coordinates using Nominatim"""
+    if not location_name or location_name.strip() == "":
+        return None
+    
     try:
+        # Clean up location name
+        location = location_name.strip()
+        
+        # If location doesn't mention NYC, try multiple search strategies
+        search_terms = []
+        if 'new york' not in location.lower() and 'nyc' not in location.lower() and 'ny' not in location.lower():
+            search_terms.append(f"{location}, New York City, NY")
+            search_terms.append(f"{location}, NYC")
+            search_terms.append(f"{location}, New York, USA")
+        else:
+            search_terms.append(location)
+        
         async with httpx.AsyncClient() as http_client:
-            params = {
-                "q": f"{location_name}, New York City, NY",
-                "format": "json",
-                "limit": 1,
-                "countrycodes": "us"
-            }
-            response = await http_client.get(
-                "https://nominatim.openstreetmap.org/search",
-                params=params,
-                headers={"User-Agent": "AgenticSafeguard/1.0"},
-                timeout=10
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if data:
-                    return (float(data[0]["lat"]), float(data[0]["lon"]))
+            for search_term in search_terms:
+                params = {
+                    "q": search_term,
+                    "format": "json",
+                    "limit": 1,
+                    "countrycodes": "us"
+                }
+                response = await http_client.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params=params,
+                    headers={"User-Agent": "AgenticSafeguard/1.0"},
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    if data:
+                        lat, lon = float(data[0]["lat"]), float(data[0]["lon"])
+                        # Verify it's in NYC area (rough bounds)
+                        # NYC bounds: lat 40.4-40.95, lon -74.3--73.7
+                        if 40.4 <= lat <= 40.95 and -74.3 <= lon <= -73.7:
+                            logger.info(f"Geocoded '{location_name}' to ({lat}, {lon})")
+                            return (lat, lon)
+                        else:
+                            logger.warning(f"'{search_term}' not in NYC area: ({lat}, {lon})")
+                            continue
     except Exception as e:
-        logger.error(f"Geocoding error: {e}")
+        logger.error(f"Geocoding error for '{location_name}': {e}")
+    
+    logger.warning(f"Could not geocode location: '{location_name}'")
     return None
 
 # ==================== STATS ====================
@@ -598,6 +1056,249 @@ async def geocode(q: str):
     if coords:
         return {"latitude": coords[0], "longitude": coords[1], "query": q}
     raise HTTPException(status_code=404, detail="Location not found")
+
+# ==================== GOOGLE CALENDAR INTEGRATION ====================
+
+async def get_google_credentials(user_id: str):
+    """Get and refresh Google credentials for a user"""
+    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not user or not user.get("google_tokens"):
+        return None
+    
+    tokens = user["google_tokens"]
+    creds = Credentials(
+        token=tokens.get("access_token"),
+        refresh_token=tokens.get("refresh_token"),
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        scopes=GOOGLE_SCOPES
+    )
+    
+    # Auto-refresh if expired
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(GoogleRequest())
+            # Update tokens in database
+            await db.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {
+                    "google_tokens.access_token": creds.token,
+                    "google_tokens.expiry": creds.expiry.isoformat() if creds.expiry else None
+                }}
+            )
+        except Exception as e:
+            logger.error(f"Token refresh failed: {e}")
+            return None
+    
+    return creds
+
+@api_router.get("/google/auth")
+async def google_auth(user=Depends(get_current_user)):
+    """Initiate Google OAuth flow"""
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Google OAuth not configured")
+    
+    # Build authorization URL
+    auth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth?"
+        f"client_id={GOOGLE_CLIENT_ID}&"
+        f"redirect_uri={GOOGLE_REDIRECT_URI}&"
+        "response_type=code&"
+        f"scope={' '.join(GOOGLE_SCOPES)}&"
+        "access_type=offline&"
+        "prompt=consent&"
+        f"state={user['_id']}"  # Pass user ID as state
+    )
+    
+    return {"authorization_url": auth_url}
+
+@api_router.get("/google/callback")
+async def google_callback(code: str, state: str):
+    """Handle Google OAuth callback"""
+    try:
+        # Exchange code for tokens
+        async with httpx.AsyncClient() as client:
+            token_response = await client.post(
+                'https://oauth2.googleapis.com/token',
+                data={
+                    'code': code,
+                    'client_id': GOOGLE_CLIENT_ID,
+                    'client_secret': GOOGLE_CLIENT_SECRET,
+                    'redirect_uri': GOOGLE_REDIRECT_URI,
+                    'grant_type': 'authorization_code'
+                }
+            )
+            
+            if token_response.status_code != 200:
+                raise HTTPException(status_code=400, detail="Failed to exchange code for token")
+            
+            tokens = token_response.json()
+            
+            # Save tokens to user (state contains user_id)
+            user_id = state
+            await db.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {
+                    "google_tokens": tokens,
+                    "google_connected_at": datetime.now(timezone.utc).isoformat()
+                }}
+            )
+            
+            # Trigger initial sync
+            try:
+                await sync_google_calendar(user_id)
+            except Exception as e:
+                logger.error(f"Initial sync failed: {e}")
+            
+            # Redirect back to frontend oauth callback page
+            return RedirectResponse(
+                url=f"{FRONTEND_URL}/oauth-callback?google_calendar=connected",
+                status_code=302
+            )
+    except Exception as e:
+        logger.error(f"Google callback error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/google/status")
+async def google_calendar_status(user=Depends(get_current_user)):
+    """Check if user has connected Google Calendar"""
+    user_id = user["_id"]
+    user_doc = await db.users.find_one({"_id": ObjectId(user_id)})
+    
+    connected = bool(user_doc.get("google_tokens"))
+    last_sync = user_doc.get("google_last_sync")
+    
+    return {
+        "connected": connected,
+        "last_sync": last_sync,
+        "connected_at": user_doc.get("google_connected_at")
+    }
+
+@api_router.post("/google/sync")
+async def trigger_google_sync(user=Depends(get_current_user)):
+    """Manually trigger Google Calendar sync"""
+    user_id = user["_id"]
+    synced_count = await sync_google_calendar(user_id)
+    return {"message": f"Synced {synced_count} events from Google Calendar", "count": synced_count}
+
+@api_router.post("/google/disconnect")
+async def disconnect_google_calendar(user=Depends(get_current_user)):
+    """Disconnect Google Calendar and remove synced events"""
+    user_id = user["_id"]
+    
+    # Remove Google tokens
+    await db.users.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$unset": {"google_tokens": "", "google_connected_at": "", "google_last_sync": ""}}
+    )
+    
+    # Delete synced plans
+    result = await db.plans.delete_many({
+        "user_id": user_id,
+        "google_event_id": {"$exists": True}
+    })
+    
+    return {"message": f"Disconnected and removed {result.deleted_count} synced events"}
+
+async def sync_google_calendar(user_id: str):
+    """Sync events from Google Calendar"""
+    creds = await get_google_credentials(user_id)
+    if not creds:
+        raise HTTPException(status_code=401, detail="Google Calendar not connected")
+    
+    try:
+        service = build('calendar', 'v3', credentials=creds)
+        
+        # Get events for next 30 days
+        now = datetime.now(timezone.utc)
+        time_min = now.isoformat()
+        time_max = (now + timedelta(days=30)).isoformat()
+        
+        events_result = service.events().list(
+            calendarId='primary',
+            timeMin=time_min,
+            timeMax=time_max,
+            maxResults=50,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+        
+        events = events_result.get('items', [])
+        synced_count = 0
+        
+        for event in events:
+            event_id = event['id']
+            
+            # Extract location
+            location_name = event.get('location', 'Unknown location')
+            
+            # Extract time
+            start = event['start'].get('dateTime', event['start'].get('date'))
+            end = event['end'].get('dateTime', event['end'].get('date'))
+            
+            # Check if we already have this event
+            existing = await db.plans.find_one({
+                "user_id": user_id,
+                "google_event_id": event_id
+            })
+            
+            # Geocode location for NYC events
+            lat, lon = None, None
+            if location_name and location_name != 'Unknown location':
+                coords = await geocode_location(location_name)
+                if coords:
+                    lat, lon = coords
+            
+            plan_data = {
+                "user_id": user_id,
+                "google_event_id": event_id,
+                "title": event.get('summary', 'Untitled Event'),
+                "location_name": location_name,
+                "latitude": lat,
+                "longitude": lon,
+                "start_time": start,
+                "end_time": end,
+                "notes": event.get('description', ''),
+                "safety_analysis": None,
+                "synced_from_google": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "last_synced": datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Auto-analyze if we have coordinates and it's in NYC
+            if lat and lon:
+                try:
+                    analysis = await run_safety_analysis(lat, lon, location_name, start)
+                    plan_data["safety_analysis"] = analysis
+                except Exception as e:
+                    logger.error(f"Auto-analysis failed for {location_name}: {e}")
+            
+            if existing:
+                # Update existing
+                await db.plans.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": plan_data}
+                )
+            else:
+                # Create new
+                plan_data["id"] = str(uuid.uuid4())
+                await db.plans.insert_one(plan_data)
+            
+            synced_count += 1
+        
+        # Update last sync time
+        await db.users.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": {"google_last_sync": datetime.now(timezone.utc).isoformat()}}
+        )
+        
+        logger.info(f"Synced {synced_count} Google Calendar events for user {user_id}")
+        return synced_count
+        
+    except Exception as e:
+        logger.error(f"Google Calendar sync error: {e}")
+        raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
 
 # ==================== STARTUP ====================
 

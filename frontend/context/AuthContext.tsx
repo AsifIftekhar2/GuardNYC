@@ -1,6 +1,19 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 import { apiGet, apiPost, setAuthToken, clearAuthToken } from '../utils/api';
+
+// Dynamic import for AsyncStorage to avoid web issues
+let AsyncStorage: any = null;
+if (Platform.OS !== 'web') {
+  AsyncStorage = require('@react-native-async-storage/async-storage').default;
+} else {
+  // Web fallback using localStorage
+  AsyncStorage = {
+    getItem: async (key: string) => localStorage.getItem(key),
+    setItem: async (key: string, value: string) => localStorage.setItem(key, value),
+    removeItem: async (key: string) => localStorage.removeItem(key),
+  };
+}
 
 interface User {
   id: string;

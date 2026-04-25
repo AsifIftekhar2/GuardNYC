@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiGet, apiPost, apiDelete } from '../../utils/api';
 
 interface Message {
@@ -12,6 +13,17 @@ interface Message {
   content: string;
   created_at?: string;
 }
+
+// Helper function to clean markdown formatting
+const cleanMarkdown = (text: string): string => {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')  // Remove bold **text**
+    .replace(/\*(.+?)\*/g, '$1')      // Remove italic *text*
+    .replace(/^[-*•]\s+/gm, '• ')     // Normalize list bullets
+    .replace(/^#{1,6}\s+(.+)$/gm, '$1') // Remove headers
+    .replace(/`(.+?)`/g, '$1')        // Remove code backticks
+    .trim();
+};
 
 export default function ChatScreen() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -27,7 +39,11 @@ export default function ChatScreen() {
   const loadHistory = async () => {
     try {
       const response = await apiGet('/api/chat/history');
-      setMessages(response.messages || []);
+      const cleanedMessages = (response.messages || []).map((msg: Message) => ({
+        ...msg,
+        content: msg.role === 'assistant' ? cleanMarkdown(msg.content) : msg.content
+      }));
+      setMessages(cleanedMessages);
     } catch {
     } finally {
       setLoadingHistory(false);
@@ -42,10 +58,67 @@ export default function ChatScreen() {
     setSending(true);
 
     try {
-      const response = await apiPost('/api/chat', { message: userMsg.content });
-      const assistantMsg: Message = { role: 'assistant', content: response.response };
-      setMessages(prev => [...prev, assistantMsg]);
-    } catch {
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8001';
+      const token = await AsyncStorage.getItem('access_token');
+      
+      // Create placeholder message for streaming
+      const assistantMsgIndex = messages.length + 1;
+      setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+      
+      // Fetch with streaming
+      const response = await fetch(`${backendUrl}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ message: userMsg.content }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get response');
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let fullContent = '';
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.chunk) {
+                  fullContent += data.chunk;
+                  // Update the assistant message with cleaned content
+                  setMessages(prev => {
+                    const updated = [...prev];
+                    updated[assistantMsgIndex] = { 
+                      role: 'assistant', 
+                      content: cleanMarkdown(fullContent)
+                    };
+                    return updated;
+                  });
+                }
+                if (data.done) {
+                  break;
+                }
+              } catch (e) {
+                // Skip invalid JSON
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Chat error:', error);
       setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, I encountered an error. Please try again.' }]);
     } finally {
       setSending(false);
@@ -90,13 +163,15 @@ export default function ChatScreen() {
             <Ionicons name="shield-checkmark" size={22} color="#0EA5E9" />
           </View>
           <View>
-            <Text style={styles.headerTitle}>Safety Agent</Text>
+            <Text style={styles.headerTitle}>Sentry</Text>
             <Text style={styles.headerSub}>Powered by AI</Text>
           </View>
         </View>
-        <TouchableOpacity testID="clear-chat-button" onPress={clearChat}>
-          <Ionicons name="trash-outline" size={22} color="#71717A" />
-        </TouchableOpacity>
+        {messages.length > 0 && (
+          <TouchableOpacity testID="clear-chat-button" onPress={clearChat}>
+            <Ionicons name="trash-outline" size={22} color="#71717A" />
+          </TouchableOpacity>
+        )}
       </View>
 
       <KeyboardAvoidingView
@@ -113,7 +188,7 @@ export default function ChatScreen() {
             <View style={styles.welcomeIconWrap}>
               <Ionicons name="shield-checkmark" size={48} color="#0EA5E9" />
             </View>
-            <Text style={styles.welcomeTitle}>NYC Safety Agent</Text>
+            <Text style={styles.welcomeTitle}>Ask Sentry - Your NYC Safety Agent</Text>
             <Text style={styles.welcomeDesc}>
               Ask me about safety in any NYC neighborhood, location, or plan. I use real NYPD shooting data to provide informed assessments.
             </Text>

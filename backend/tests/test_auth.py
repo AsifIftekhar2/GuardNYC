@@ -3,7 +3,7 @@ import pytest
 import requests
 import os
 
-BASE_URL = os.environ.get('EXPO_PUBLIC_BACKEND_URL') or os.environ.get('BACKEND_URL') or 'https://nyc-guard-ai.preview.emergentagent.com'
+BASE_URL = os.environ.get('EXPO_PUBLIC_BACKEND_URL') or os.environ.get('BACKEND_URL') or 'https://load-app-10.preview.emergentagent.com'
 BASE_URL = BASE_URL.rstrip('/')
 
 class TestAuth:
