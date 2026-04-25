@@ -1,357 +1,62 @@
-# Sentry 🛡️
+# Agentic Safeguard 🛡️
 
 **AI-Powered NYC Safety Intelligence App**
 
-A React Native (Expo Web) application that helps users assess and navigate safety risks across New York City using real NYPD crime data (2006-Present) powered by **local AI inference**.
+A React Native mobile application that helps users assess and navigate safety risks across New York City using real NYPD shooting incident data (2006-Present) powered by AI.
 
 ![App Preview](https://img.shields.io/badge/Platform-iOS%20%7C%20Android%20%7C%20Web-blue)
 ![Tech Stack](https://img.shields.io/badge/Stack-React%20Native%20%7C%20FastAPI%20%7C%20MongoDB-green)
-![AI](https://img.shields.io/badge/AI-Local%20Ollama-purple)
 
 ---
 
 ## 🌟 Features
 
-- **🗺️ Interactive Crime Heatmap** - Full-screen dark-themed map with shooting incident overlay
-- **🤖 AI Safety Sentry** - Conversational AI powered by local Ollama (nemotron-3-nano) for safety queries
-- **📅 Safety-Aware Event Planning** - Automatic AI safety analysis for scheduled events with 400m radius
-- **📊 Daily Safety Brief** - AI-generated morning summary of today's events with risk assessment
+- **🗺️ Interactive Shooting Heatmap** - Full-screen dark-themed map with color-coded density overlay
+- **🤖 AI Safety Sentry** - Conversational AI powered by Gemini 3 Flash for safety queries
+- **📅 Safety-Aware Event Planning** - Automatic AI safety analysis for scheduled events
+- **📊 Statistics Dashboard** - Borough statistics, time distribution, and yearly trends
 - **🔗 Google Calendar Integration** - Sync events with automatic safety assessments
 - **🔐 JWT Authentication** - Secure user registration and login
-- **🏠 100% Local AI** - Privacy-first design with zero cloud AI dependencies
 
 ---
 
-## 🏗️ Tech Stack & Architecture
+## 🏗️ Tech Stack
 
 ### Frontend
 - **React Native** with Expo SDK 54
 - **Expo Router** (file-based routing)
 - **TypeScript**
 - **Leaflet.js** (maps via WebView)
-- **AsyncStorage** (token persistence)
 
 ### Backend
-- **FastAPI** (Python 3.10+)
-- **MongoDB** with Motor (async driver)
-- **JWT Authentication** (python-jose + bcrypt)
-- **Local Ollama AI** (nemotron-3-nano via Tailscale)
-- **httpx** (async HTTP client for Ollama & NYC APIs)
+- **FastAPI** (Python)
+- **MongoDB** (database)
+- **Motor** (async MongoDB driver)
+- **Google GenAI** (Gemini 1.5 Flash AI)
 
-### Data Sources
-- **NYC OpenData SODA API**
-  - NYPD Shooting Incident Data (Historic) - ~5,000+ records, 2006-present
-  - NYPD Complaint Data (Historic + Current) - ~30,000+ records, last 3 years
-- **Google Calendar API** (OAuth 2.0 integration)
-
-### AI Infrastructure
-- **Local Ollama Server** on Acer machine
-- **Tailscale Private Network** (100.96.157.82:11434)
-- **Model:** nemotron-3-nano (optimized for speed)
-- **Privacy:** 100% local inference, no cloud AI calls
+### Data Source
+- **NYC OpenData** - NYPD Shooting Incident Data API
+- ~5,000 shooting records cached locally
 
 ---
 
-## 📐 Simple Architecture Diagram
+## 📋 Prerequisites
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         USER DEVICE                              │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │  React Native App (Expo Web/iOS/Android)                   │ │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │ │
-│  │  │   Map    │  │  Sentry  │  │  Plans   │  │ Profile  │   │ │
-│  │  │   Tab    │  │  (Chat)  │  │   Tab    │  │   Tab    │   │ │
-│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │ │
-│  │                      ▲                                      │ │
-│  │                      │ JWT Auth + API Calls                │ │
-│  └──────────────────────┼──────────────────────────────────────┘ │
-└────────────────────────┼─────────────────────────────────────────┘
-                         │
-                         │ HTTPS (localhost:8001 or deployed URL)
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      FASTAPI BACKEND                             │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │  server.py (Main API)                                      │ │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │ │
-│  │  │ Auth Routes  │  │ Data Sync    │  │ AI Routes    │     │ │
-│  │  │ /api/auth/*  │  │ /api/*/sync  │  │ /api/chat    │     │ │
-│  │  └──────────────┘  └──────────────┘  └──────────────┘     │ │
-│  └────────────────────────────────────────────────────────────┘ │
-│           │                    │                    │            │
-│           ▼                    ▼                    ▼            │
-│    ┌──────────────┐   ┌──────────────┐   ┌──────────────┐      │
-│    │   MongoDB    │   │  NYC OpenData│   │    Ollama    │      │
-│    │   (Motor)    │   │   SODA API   │   │   (Tailscale)│      │
-│    │              │   │              │   │              │      │
-│    │  • users     │   │ • shootings  │   │ nemotron-3   │      │
-│    │  • plans     │   │ • complaints │   │   -nano      │      │
-│    │  • messages  │   │              │   │              │      │
-│    │  • briefs    │   │              │   │ 100.96.157   │      │
-│    └──────────────┘   └──────────────┘   │  .82:11434   │      │
-│                                           └──────────────┘      │
-│                        ┌──────────────┐                         │
-│                        │Google Calendar│                        │
-│                        │  OAuth 2.0   │                        │
-│                        └──────────────┘                         │
-└─────────────────────────────────────────────────────────────────┘
+Before running this app locally, ensure you have:
 
-Data Flow:
-1. User interacts with React Native UI
-2. Frontend sends authenticated requests to FastAPI backend
-3. Backend queries MongoDB for stored data
-4. Backend syncs fresh crime data from NYC OpenData (on-demand)
-5. Backend sends analysis prompts to local Ollama server via Tailscale
-6. AI responses streamed back to frontend in real-time
-7. Google Calendar events synced bidirectionally via OAuth
-```
+- **Node.js** v18+ ([Download](https://nodejs.org/))
+- **Python** 3.10+ ([Download](https://www.python.org/downloads/))
+- **MongoDB** Community Edition ([Download](https://www.mongodb.com/try/download/community))
+- **Yarn** package manager: `npm install -g yarn`
+- **Git** ([Download](https://git-scm.com/download/win))
+
+### Optional (for mobile development)
+- **Android Studio** (for Android emulator)
+- **Expo Go** app (for testing on physical device)
 
 ---
 
-## 🚀 Quick Start
-
-### Prerequisites
-- **Node.js** v18+ & **Yarn** package manager
-- **Python** 3.10+
-- **MongoDB** Community Edition (local) or Atlas (cloud)
-- **Ollama** running on local network (optional for AI features)
-- **Tailscale** (optional, for private Ollama access)
-
-### 1. Clone & Install
-
-```bash
-# Clone repository
-git clone <your-repo-url>
-cd sentry-app
-
-# Install backend dependencies
-cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-
-# Install frontend dependencies
-cd ../frontend
-yarn install
-```
-
-### 2. Environment Configuration
-
-**Backend** (create `/app/backend/.env`):
-```env
-# Database
-MONGO_URL=mongodb://localhost:27017
-DB_NAME=agentic_safeguard
-
-# Auth
-JWT_SECRET=your-secret-key-minimum-32-characters-change-this
-ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD=admin123
-
-# Local Ollama (via Tailscale)
-OLLAMA_BASE_URL=*YOUR LCOAL URL*
-OLLAMA_MODEL=nemotron-3-nano
-
-# Google OAuth (for Calendar - optional)
-GOOGLE_CLIENT_ID=your-google-client-id
-GOOGLE_CLIENT_SECRET=your-google-client-secret
-GOOGLE_REDIRECT_URI=http://localhost:8001/api/google/callback
-FRONTEND_URL=http://localhost:8081
-```
-
-**Frontend** (create `/app/frontend/.env`):
-```env
-EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
-```
-
-> 💡 **Tip:** Copy from `.env.example` files and update values
-
-### 3. Run the App
-
-**Terminal 1 - Start MongoDB:**
-```bash
-# macOS/Linux
-sudo systemctl start mongod
-
-# Windows
-net start MongoDB
-```
-
-**Terminal 2 - Start Backend:**
-```bash
-cd backend
-source venv/bin/activate  # Windows: venv\Scripts\activate
-uvicorn server:app --host 0.0.0.0 --port 8001 --reload
-```
-✅ API running at: http://localhost:8001  
-📚 API docs: http://localhost:8001/docs
-
-**Terminal 3 - Start Frontend:**
-```bash
-cd frontend
-
-# For web preview (recommended)
-npx expo start --web --port 3000
-
-# For mobile (Expo Go app)
-yarn start
-```
-✅ Web app: http://localhost:3000  
-📱 Mobile: Scan QR code with Expo Go app
-
-### 4. Login & Test
-- **Email:** `admin@example.com`
-- **Password:** `admin123`
-
----
-
-## 🔄 How to Reproduce Demo
-
-### Step 1: Sync Crime Data
-Once backend is running, sync NYC crime datasets:
-
-```bash
-# Sync shooting data (~5,000 records, ~30 seconds)
-curl -X GET http://localhost:8001/api/shootings/sync
-
-# Sync complaint data (~30,000 records, ~2-3 minutes)
-curl -X GET http://localhost:8001/api/complaints/sync
-```
-
-### Step 2: Configure Ollama (for AI Features)
-The app requires a **local Ollama server** for AI analysis:
-
-**Option A: Local Ollama**
-```bash
-# Install Ollama: https://ollama.com/download
-ollama serve
-
-# Pull the model
-ollama pull nemotron-3-nano
-
-# Update backend/.env
-OLLAMA_BASE_URL=http://localhost:11434
-```
-
-**Option B: Remote Ollama via Tailscale**
-```bash
-# Install Tailscale: https://tailscale.com/download
-# Connect to your private network
-# Get your Ollama machine's Tailscale IP
-tailscale ip -4
-
-# Update backend/.env with Tailscale IP
-OLLAMA_BASE_URL=http://100.96.157.82:11434
-```
-
-### Step 3: Test Features
-1. **Map Tab:** Tap any location to see AI safety analysis
-2. **Sentry Tab:** Chat with AI about NYC safety
-3. **Plans Tab:** Create an event, get automatic risk assessment
-4. **Profile Tab:** Set daily brief time, view today's summary
-
-**Without Ollama:** The app will fall back to rule-based risk scoring (no AI chat).
-
----
-
-## 📊 Dataset Provenance & Synthetic Data
-
-### Real Data Sources
-
-All crime data is sourced from **NYC Open Data** (public domain):
-
-1. **NYPD Shooting Incident Data (Historic)**
-   - **Dataset ID:** `833y-fsy8`
-   - **URL:** https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8
-   - **Years:** 2006 - Present
-   - **Records:** ~5,000+ shooting incidents
-   - **Fields:** Latitude, Longitude, Date/Time, Borough, Murder Flag
-   - **Update Frequency:** Monthly by NYPD
-   - **License:** Public Domain
-
-2. **NYPD Complaint Data Historic**
-   - **Dataset ID:** `qgea-i56i`
-   - **URL:** https://data.cityofnewyork.us/Public-Safety/NYPD-Complaint-Data-Historic/qgea-i56i
-   - **Years:** 2006 - 2023
-   - **Records:** ~7 million total (app filters last 3 years, ~30,000 cached)
-   - **Fields:** Latitude, Longitude, Offense Description, Severity (Felony/Misdemeanor/Violation)
-   - **Update Frequency:** Quarterly
-   - **License:** Public Domain
-
-3. **NYPD Complaint Data Current (Year to Date)**
-   - **Dataset ID:** `5uac-w243`
-   - **URL:** https://data.cityofnewyork.us/Public-Safety/NYPD-Complaint-Data-Current-Year-To-Date-/5uac-w243
-   - **Years:** 2024-Present
-   - **Update Frequency:** Weekly
-   - **License:** Public Domain
-
-### Data Processing
-- **Geo-Indexing:** MongoDB 2dsphere indexes for fast radius queries
-- **Filtering:** Complaint data limited to last 3 years for relevance
-- **Normalization:** Crime density calculated per 100,000 sq meters
-- **Validation:** Invalid coordinates (0,0 or null) excluded
-
-### No Synthetic Data
-This app uses **100% real crime data** from official NYPD sources. No synthetic or simulated data is used.
-
----
-
-## ⚠️ Known Limitations & Next Steps
-
-### Current Limitations
-
-1. **🐌 AI Response Latency (Major)**
-   - **Issue:** Risk analysis can take 5-30 seconds when using local Ollama on an Acer machine over Tailscale
-   - **Cause:** 
-     - Network latency over Tailscale VPN
-     - Limited hardware resources on Acer machine
-     - No prompt caching implemented
-   - **Impact:** Suboptimal user experience, especially for real-time chat
-   - **Mitigation:** Rule-based fallback activates if Ollama times out
-
-2. **🔄 Manual Data Sync**
-   - Crime data must be manually synced via API calls (`/api/shootings/sync`, `/api/complaints/sync`)
-   - No automated scheduled updates (requires cron job or background worker)
-
-3. **🗺️ NYC Only**
-   - App only supports New York City crime data
-   - No multi-city support
-
-4. **📱 Mobile UI on Web**
-   - Web preview is functional but optimized for mobile viewports
-   - Desktop experience could be improved
-
-### Performance Optimization Suggestions
-
-#### Short-Term (Quick Wins)
-- **Test Lighter Models:** Try `llama3-8b` or `mistral-7b` for faster inference
-- **Enable Prompt Caching:** Ollama supports caching, could reduce repeat queries by 50%+
-- **Add Progress Indicators:** Show "Analyzing safety..." with spinner during AI calls
-- **Implement Request Timeouts:** Fail fast (3-5s) and use fallback instead of waiting 30s
-
-#### Mid-Term (Architecture Changes)
-- **Self-Hosted llama.cpp:** Faster inference than Ollama for single-model deployments
-- **Quantized Models:** Use 4-bit quantization (GGUF format) for 2-3x speed boost
-- **Response Streaming:** Already implemented, but could optimize chunk sizes
-- **Edge Caching:** Cache common location analyses in MongoDB (TTL: 24 hours)
-
-#### Long-Term (Production-Ready)
-- **Cloud AI Fallback:** Use OpenAI/Anthropic as fallback when local Ollama is slow
-- **Dedicated Inference Server:** Deploy vLLM or TensorRT-LLM on GPU instance
-- **CDN for Data:** Serve pre-computed heatmap tiles for instant map loads
-- **Background Workers:** Celery + Redis for async analysis jobs
-
-### Next Steps (Prioritized)
-1. ✅ Document architecture and setup (this README)
-2. 🔄 Implement scheduled data sync (cron job or GitHub Actions)
-3. 🚀 Test alternative Ollama models for speed
-4. 📊 Add analytics to measure actual AI latency in production
-5. 🌐 Deploy to cloud (Railway/Render for backend, Vercel for web frontend)
-
----
-
-## 🚀 Local Setup (Detailed - Windows/macOS/Linux)
+## 🚀 Local Setup - Windows
 
 ### Step 1: Clone the Repository
 
@@ -392,7 +97,28 @@ yarn install
 
 ### Step 4: Environment Configuration
 
-See **"🚀 Quick Start"** section above for complete `.env` configuration guide with all required variables.
+Create the following `.env` files:
+
+**Backend** (`/backend/.env`):
+```env
+MONGO_URL=mongodb://localhost:27017
+DB_NAME=agentic_safeguard
+JWT_SECRET=your-secret-key-here-min-32-characters
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=admin123
+GEMINI_API_KEY=your-google-gemini-api-key
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+GOOGLE_REDIRECT_URI=http://localhost:8001/api/google/callback
+FRONTEND_URL=http://localhost:8081
+```
+
+**Frontend** (`/frontend/.env`):
+```env
+EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
+```
+
+> ⚠️ **IMPORTANT**: Never commit `.env` files to Git. These files are already in `.gitignore`.
 
 ---
 
@@ -426,9 +152,9 @@ uvicorn server:app --host 0.0.0.0 --port 8001 --reload
 **Option A: Web Browser** (Recommended for development)
 ```bash
 cd frontend
-npx expo start --web --port 3000
+yarn web
 ```
-✅ Opens at: `http://localhost:3000`
+✅ Opens at: `http://localhost:8081`
 
 **Option B: Mobile Device with Expo Go**
 ```bash
@@ -460,14 +186,12 @@ yarn ios
 - **Email**: `admin@example.com`
 - **Password**: `admin123`
 
-*(Auto-seeded on first backend startup)*
-
 ### Test Flow
 1. Open the app and login with admin credentials
-2. **Map Tab**: View NYC shooting heatmap, tap locations for AI analysis (requires Ollama)
-3. **Sentry Tab**: Chat with AI about safety concerns (requires Ollama, shows "AI unavailable" fallback otherwise)
+2. **Map Tab**: View NYC shooting heatmap, click locations for AI analysis
+3. **Sentry Tab**: Chat with AI about safety concerns
 4. **Plans Tab**: Create events with automatic safety analysis
-5. **Profile Tab**: Configure daily brief time, view today's summary
+5. **Profile Tab**: View statistics and user info
 
 ---
 
@@ -488,8 +212,7 @@ yarn ios
 │   │   │   ├── index.tsx     # Map screen
 │   │   │   ├── chat.tsx      # Sentry (AI chat) screen
 │   │   │   ├── calendar.tsx  # Plans screen
-│   │   │   └── profile.tsx   # Profile & daily brief screen
-│   │   ├── oauth-callback.tsx # Google OAuth popup handler
+│   │   │   └── profile.tsx   # Profile screen
 │   │   ├── _layout.tsx       # Root layout
 │   │   └── index.tsx         # Entry point
 │   ├── context/
@@ -503,8 +226,6 @@ yarn ios
 │   ├── PRD.md                # Product Requirements Document
 │   └── test_credentials.md   # Test account credentials
 │
-├── OLLAMA_SETUP.md           # Ollama configuration guide
-├── SAFETY_ENHANCEMENT.md     # Risk assessment methodology
 └── README.md                 # This file
 ```
 
@@ -591,12 +312,10 @@ yarn start --clear
 - Check backend logs for errors
 
 ### AI Features Not Working
-- Ensure Ollama is running and accessible
-- **Local Ollama:** Check `OLLAMA_BASE_URL=http://localhost:11434` in `/backend/.env`
-- **Remote Ollama:** Verify Tailscale connection and IP address
-- Test Ollama manually: `curl http://localhost:11434/api/tags`
-- App will use rule-based fallback if Ollama is unavailable (no AI chat, basic risk scores)
-- See `/app/OLLAMA_SETUP.md` for detailed configuration
+- Ensure `GEMINI_API_KEY` is set in `/backend/.env`
+- Get a free API key from: https://aistudio.google.com/app/apikey
+- Restart backend after adding the key: `supervisorctl restart backend`
+- App uses **Google GenAI** (google-genai package) - latest stable API
 
 ---
 
@@ -608,14 +327,11 @@ yarn start --clear
 - Rotate secrets regularly in production
 
 ### API Keys Required
-1. **Local Ollama Server** - For AI features (free, self-hosted)
-   - Install from: [ollama.com](https://ollama.com/download)
-   - Model: `nemotron-3-nano` (or any compatible model)
-   - Set as `OLLAMA_BASE_URL` in backend `.env`
-   - **Optional:** Can use cloud AI as alternative (requires API keys)
-2. **Google OAuth Credentials** - For calendar integration (optional)
+1. **Google Gemini API Key** - For AI features (Gemini 1.5 Flash)
+   - Get from: [Google AI Studio](https://aistudio.google.com/app/apikey)
+   - Set as `GEMINI_API_KEY` in backend `.env`
+2. **Google OAuth Credentials** - For calendar integration
    - Get from: [Google Cloud Console](https://console.cloud.google.com)
-   - Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in backend `.env`
 
 ---
 
@@ -673,11 +389,10 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🙏 Acknowledgments
 
-- **NYC OpenData** - NYPD Shooting Incident Data & Complaint Data (public domain)
-- **Ollama** - Local AI inference platform
+- **NYC OpenData** - NYPD Shooting Incident Data
+- **Emergent AI** - LLM integration platform
 - **Expo Team** - React Native framework
 - **FastAPI** - Modern Python web framework
-- **Tailscale** - Secure private networking
 
 ---
 
@@ -691,33 +406,12 @@ For issues, questions, or feature requests:
 
 ## 🗺️ Roadmap
 
-### Current Focus
-- ✅ Complete local Ollama AI migration (DONE)
-- ✅ Inverted risk scale (1=safest, 10=dangerous) (DONE)
-- ✅ NYPD Complaint Data integration (DONE)
-- ✅ Daily Safety Brief feature (DONE)
-- 🔄 Performance optimization for AI latency (IN PROGRESS)
-
-### Near-Term
-- [ ] Automated scheduled data sync (cron jobs)
-- [ ] Test alternative models for faster inference
-- [ ] Implement prompt caching for repeated queries
-- [ ] Add loading states and progress indicators
-- [ ] Deploy to production (Railway + Vercel)
-
-### Mid-Term
-- [ ] Push notifications for high-risk event alerts
-- [ ] Real-time data updates from NYC OpenData
-- [ ] Safe route planning between two points
+- [ ] Push notifications for safety alerts
+- [ ] Real-time incident updates
 - [ ] Community reporting features
-- [ ] Mobile app builds (iOS/Android via EAS)
-
-### Long-Term
-- [ ] Multi-city expansion (Chicago, LA, etc.)
-- [ ] Predictive risk modeling (time series forecasting)
-- [ ] Premium insights for businesses
-- [ ] API access for developers
-- [ ] Multi-language support (Spanish priority)
+- [ ] Route planning with safety optimization
+- [ ] Premium safety insights for businesses
+- [ ] Multi-city expansion
 
 ---
 
