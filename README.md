@@ -32,7 +32,7 @@ A React Native mobile application that helps users assess and navigate safety ri
 - **FastAPI** (Python)
 - **MongoDB** (database)
 - **Motor** (async MongoDB driver)
-- **NVIDIA GenAI** (Nemotron 3 Nano 30B A3B)
+- **NVIDIA GenAI w/ Ollama** (Nemotron 3 Nano 30B A3B)
 
 ### Data Source
 - **NYC OpenData** - NYPD Shooting Incident Data API
