@@ -14,7 +14,6 @@ A React Native mobile application that helps users assess and navigate safety ri
 - **🗺️ Interactive Shooting Heatmap** - Full-screen dark-themed map with color-coded density overlay
 - **🤖 AI Safety Sentry** - Conversational AI powered by Nemotron 3 Nano 30B A3B for safety queries
 - **📅 Safety-Aware Event Planning** - Automatic AI safety analysis for scheduled events
-- **📊 Statistics Dashboard** - Borough statistics, time distribution, and yearly trends
 - **🔗 Google Calendar Integration** - Sync events with automatic safety assessments
 - **🔐 JWT Authentication** - Secure user registration and login
 
@@ -190,7 +189,7 @@ yarn ios
 2. **Map Tab**: View NYC shooting heatmap, click locations for AI analysis
 3. **Sentry Tab**: Chat with AI about safety concerns
 4. **Plans Tab**: Create events with automatic safety analysis
-5. **Profile Tab**: View statistics and user info
+5. **Profile Tab**: View daily brief
 
 ---
 
