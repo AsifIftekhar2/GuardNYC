@@ -12,7 +12,7 @@ A React Native mobile application that helps users assess and navigate safety ri
 ## 🌟 Features
 
 - **🗺️ Interactive Shooting Heatmap** - Full-screen dark-themed map with color-coded density overlay
-- **🤖 AI Safety Sentry** - Conversational AI powered by Gemini 3 Flash for safety queries
+- **🤖 AI Safety Sentry** - Conversational AI powered by Nemotron 3 Nano 30B A3B for safety queries
 - **📅 Safety-Aware Event Planning** - Automatic AI safety analysis for scheduled events
 - **📊 Statistics Dashboard** - Borough statistics, time distribution, and yearly trends
 - **🔗 Google Calendar Integration** - Sync events with automatic safety assessments
@@ -32,7 +32,7 @@ A React Native mobile application that helps users assess and navigate safety ri
 - **FastAPI** (Python)
 - **MongoDB** (database)
 - **Motor** (async MongoDB driver)
-- **Google GenAI** (Gemini 1.5 Flash AI)
+- **NVIDIA GenAI** (Nemotron 3 Nano 30B A3B)
 
 ### Data Source
 - **NYC OpenData** - NYPD Shooting Incident Data API
@@ -106,7 +106,6 @@ DB_NAME=agentic_safeguard
 JWT_SECRET=your-secret-key-here-min-32-characters
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=admin123
-GEMINI_API_KEY=your-google-gemini-api-key
 GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 GOOGLE_REDIRECT_URI=http://localhost:8001/api/google/callback
@@ -312,7 +311,6 @@ yarn start --clear
 - Check backend logs for errors
 
 ### AI Features Not Working
-- Ensure `GEMINI_API_KEY` is set in `/backend/.env`
 - Get a free API key from: https://aistudio.google.com/app/apikey
 - Restart backend after adding the key: `supervisorctl restart backend`
 - App uses **Google GenAI** (google-genai package) - latest stable API
@@ -327,10 +325,7 @@ yarn start --clear
 - Rotate secrets regularly in production
 
 ### API Keys Required
-1. **Google Gemini API Key** - For AI features (Gemini 1.5 Flash)
-   - Get from: [Google AI Studio](https://aistudio.google.com/app/apikey)
-   - Set as `GEMINI_API_KEY` in backend `.env`
-2. **Google OAuth Credentials** - For calendar integration
+1. **Google OAuth Credentials** - For calendar integration
    - Get from: [Google Cloud Console](https://console.cloud.google.com)
 
 ---
